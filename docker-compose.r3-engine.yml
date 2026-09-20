@@ -1,0 +1,68 @@
+services:
+  engine-spike:
+    build:
+      context: .
+      dockerfile: tools/engine-spike/Dockerfile
+    depends_on:
+      tracker:
+        condition: service_started
+      seeder:
+        condition: service_healthy
+    volumes:
+      - fixture-data:/fixtures:ro
+      - ${RUSTORR_ENGINE_SPIKE_RUN_ROOT:-/tmp/rustorr-engine-spike}:/results
+    networks: [baseline]
+
+  pex-middle:
+    build:
+      context: .
+      dockerfile: tools/engine-spike/Dockerfile
+    hostname: pex-middle
+    depends_on:
+      tracker:
+        condition: service_started
+      seeder:
+        condition: service_healthy
+    command:
+      - --torrent
+      - /fixtures/torrents/single.torrent
+      - --output
+      - /results/${RUSTORR_PEX_RUN_ID:-pex}/middle
+      - --tracker
+      - http://tracker:6969/announce
+      - --disable-dht
+      - --listen-port
+      - "46900"
+      - --offset
+      - "0"
+      - --length
+      - "262144"
+      - --initialize-timeout-ms
+      - "90000"
+      - --read-timeout-ms
+      - "90000"
+      - --upload-limit-bps
+      - "65536"
+      - --download-limit-bps
+      - "131072"
+      - --result-file
+      - /results/${RUSTORR_PEX_RUN_ID:-pex}/middle.json
+      - --hold-ms
+      - "240000"
+    volumes:
+      - fixture-data:/fixtures:ro
+      - ${RUSTORR_ENGINE_SPIKE_RUN_ROOT:-/tmp/rustorr-engine-spike}:/results
+    networks: [baseline]
+
+  pex-client:
+    build:
+      context: .
+      dockerfile: tools/engine-spike/Dockerfile
+    hostname: pex-client
+    depends_on:
+      pex-middle:
+        condition: service_started
+    volumes:
+      - fixture-data:/fixtures:ro
+      - ${RUSTORR_ENGINE_SPIKE_RUN_ROOT:-/tmp/rustorr-engine-spike}:/results
+    networks: [baseline]
