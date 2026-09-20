@@ -1,0 +1,16 @@
+{
+  "schema": "rustorr.r1.scenarios.v1",
+  "reference": "TorrServer MatriX.145@2c7fa43b9ac64a9eda27314c0b6791518497f188",
+  "scenarios": [
+    {"id": "cold-known-torrent", "views": 1, "state": "empty", "input": "torrent", "metrics": ["client_start_ms", "server_start_ms", "stalls"]},
+    {"id": "cold-magnet-metadata", "views": 1, "state": "empty", "input": "magnet", "metrics": ["client_start_ms", "metadata_discovery_ms", "stalls"]},
+    {"id": "warm-known-torrent", "views": 1, "state": "warm", "input": "torrent", "metrics": ["client_start_ms", "stalls"]},
+    {"id": "seek-loaded", "views": 1, "state": "loaded", "input": "torrent", "metrics": ["seek_ms", "stalls"]},
+    {"id": "seek-missing", "views": 1, "state": "missing", "input": "torrent", "metrics": ["seek_ms", "stalls"]},
+    {"id": "seek-evicted", "views": 1, "state": "evicted", "input": "torrent", "metrics": ["seek_ms", "stalls"]},
+    {"id": "continuous-one-view", "views": 1, "state": "warm", "input": "torrent", "metrics": ["stalls", "rss", "cpu", "disk", "network"]},
+    {"id": "continuous-three-views", "views": 3, "state": "warm", "input": "torrent", "metrics": ["stalls", "rss", "cpu", "disk", "network"]},
+    {"id": "netem-delay-loss", "views": 1, "state": "warm", "input": "torrent", "network": {"delay_ms": 80, "loss_percent": 1}, "metrics": ["client_start_ms", "seek_ms", "stalls"]},
+    {"id": "peer-departure", "views": 1, "state": "warm", "input": "torrent", "network": {"stop_fast_seeder": true}, "metrics": ["stalls", "recovery_ms"]}
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schema": "rustorr.r2.compatibility-matrix.v1",
+  "reference": "TorrServer MatriX.145@2c7fa43b9ac64a9eda27314c0b6791518497f188",
+  "categories": ["required", "capability-specific", "observed-reference", "not-characterized", "blocked"],
+  "areas": [
+    {"area": "api", "classification": "required", "contract": "JSON actions, fields, types, empty arrays, nulls, errors and HTTP status"},
+    {"area": "stream", "classification": "required", "contract": "GET/HEAD, Range, ETag, conditional requests, MIME and body bytes"},
+    {"area": "playlist", "classification": "required", "contract": "M3U URLs, ordering, filenames and external-player directives"},
+    {"area": "access", "classification": "required", "contract": "BasicAuth, CORS, WAF and forwarded host/proto behavior"},
+    {"area": "cache-viewed", "classification": "required", "contract": "cache/viewed state and HEAD side effects"},
+    {"area": "search-media", "classification": "capability-specific", "contract": "search, storage, TMDB, GStreamer and ffprobe availability and wire shape"},
+    {"area": "mcp", "classification": "capability-specific", "contract": "MCP initialize response and protocol error shape"},
+    {"area": "dlna-discovery", "classification": "capability-specific", "contract": "DLNA and Bonjour service behavior; HTTP probe only for DLNA"},
+    {"area": "webdav-fuse", "classification": "capability-specific", "contract": "WebDAV OPTIONS and FUSE HTTP route availability"}
+  ]
+}

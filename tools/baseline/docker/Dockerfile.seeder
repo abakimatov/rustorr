@@ -1,0 +1,10 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y transmission-daemon transmission-cli ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY tools/baseline/docker/start-seeder.sh /usr/local/bin/start-seeder
+RUN chmod 0755 /usr/local/bin/start-seeder
+
+ENTRYPOINT ["/usr/local/bin/start-seeder"]

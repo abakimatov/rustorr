@@ -35,7 +35,7 @@
 
 Выход: ссылки и commit эталона проверены; список функций и внешних контрактов составлен; открытые решения явно перечислены.
 
-### R1 — Локальный baseline TorrServer
+### R1 — Локальный baseline TorrServer (`done`)
 
 Цель: получить воспроизводимые исходные показатели и эталонное поведение.
 
@@ -49,7 +49,7 @@
 
 Handoff: `baseline commit`, окружение, команды запуска, расположение результатов, последний успешный сценарий, незакрытые измерения.
 
-### R2 — Characterization внешних контрактов
+### R2 — Characterization внешних контрактов (`done`)
 
 Цель: превратить поведение эталона в автоматические совместимые проверки.
 
@@ -152,6 +152,41 @@ Append this block to the stage file or this document after each session:
 
 ## Current checkpoint
 
-- Current stage: `R0` documentation complete; next stage is `R1`.
-- Implementation status: not started by user request.
-- Next session should read this file and begin by designing the local baseline harness, not by choosing a production engine or writing Rustorr modules.
+- Current stage: `R2` complete; next stage is `R3` engine spike and choice.
+- Implementation status: Docker harness, deterministic fixture generation, known-torrent smoke and HTTP workload-matrix runner completed; one full matrix run is now recorded.
+- Latest smoke evidence: `/tmp/rustorr-baseline/20260920T122608Z`; controlled netem applied and cleared successfully, with Range `206` in 579.7 ms; peer departure stopped the seeder successfully and the post-departure Range returned `206` in 3.9 ms. Reviewed aggregate: [`docs/benchmark-baseline.json`](benchmark-baseline.json).
+- Next action: begin R3 engine spike using the R1 scenarios and the R2 contract constraints.
+
+### Handoff 2026-09-20 — R1
+- Status: done
+- Objective completed: Docker baseline stack, deterministic single/multi-file torrent smoke path, full HTTP workload-matrix runner, controlled netem/peer-departure orchestration and per-scenario aggregation.
+- Files/artifacts changed: `docker-compose.baseline.yml`, `tools/baseline/`, `.gitignore`, this checkpoint.
+- Commands/tests run: `tools/baseline/r1.sh run` with Docker Desktop; `sh -n tools/baseline/r1.sh`; Python compile check; Compose config validation; fixture reproducibility diff.
+- Evidence and results: `/tmp/rustorr-baseline/20260920T122608Z` and [`docs/benchmark-baseline.json`](benchmark-baseline.json); TorrServer MatriX.145 built from pinned commit; cold/warm/magnet/seek/1-view/3-view rows executed; netem apply/clear both returned code 0; seeder stop returned code 0; controlled rows returned HTTP `206`. Latest run recorded 0 failed requests, p50 `7.5 ms`, p95 `10814.8 ms`, and 12 transport stall-threshold events. Two-run aggregation records cold known-torrent p95 `10911.5 ms`, warm p95 `4976.2 ms`, seek-loaded p95 `4512.8 ms`, netem `579.7 ms`, and peer-departure recovery `3.9 ms`.
+- Decisions made: Go entrypoint is `./server/cmd`; Docker build uses Go 1.25; tracker uses generated whitelist; seeder uses Transmission with existing-file verification.
+- Decisions made: approved baseline-derived parity floors in `docs/benchmark-baseline.json`; accepted that eviction is represented by an explicit precondition because TorrServer exposes no deterministic eviction API in this harness; accepted that peer departure did not stall because the requested range was already available; transport stall proxy is not decoded-player rebuffering evidence.
+- Open risks/questions: cold Range latency is currently measured separately from control-plane p50/p95; player-level rebuffering and deterministic eviction remain follow-up characterization concerns.
+- Exact next action: start R2 contract characterization against the pinned TorrServer reference.
+- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, working tree after `0741c0d`, Docker context `desktop-linux`, Compose file `docker-compose.baseline.yml`.
+
+### Handoff 2026-09-20 — R2 start
+- Status: in progress
+- Objective completed: contract manifest, raw corpus runner, semantic diff and compatibility matrix skeleton added; deterministic Unicode/nested-path/external-track fixture added without changing the existing single fixture hash.
+- Files/artifacts changed: `tools/contract/`, `tools/r2.sh`, `tools/baseline/generate-fixtures.py`.
+- Commands/tests run: static checks plus Docker Compose reference stack; two control-plane captures with `tools/r2.sh capture reference --timeout 3 --only ...`; semantic diff; direct TorrServer Range probe; Docker status/log and fixture hash checks.
+- Evidence and results: `/tmp/rustorr-contract/20260920T144518Z/reference.json` contains 34 cases with 0 request errors: control endpoints (200/204/400/404), raw GET/HEAD, single/suffix/open/multipart Range (`206`), M3U, GStreamer, CORS and MCP Streamable HTTP. Proxy capture `/tmp/rustorr-contract/20260920T145209Z/candidate.json` confirms forwarded-host M3U URLs and VLC external `.ac3`/`.srt` tracks through nginx on `127.0.0.1:8091`; TLS capture `/tmp/rustorr-contract/20260920T145806Z/candidate.json` has 0 errors and media M3U/ForkPlayer outputs contain only `https://` URLs through self-signed HTTPS on `8443`. Raw corpus preserves response bytes, hashes and JSON; normalization explicitly covers Date/Last-Modified, timestamps, peer/runtime counters, derived JSON Content-Length and generated multipart boundaries. The seeder fix `--encryption-tolerated` was validated by R1-compatible `connected_seeders=1` and HTTP `206`; clean repeatability was previously proven with `/tmp/rustorr-contract/20260920T135227Z*` and normalized `equal=true`.
+- Decisions made: R2 corpus stores raw body bytes as base64 and decoded JSON together; raw and GStreamer probes remain separate scenarios; capability-specific endpoints remain visible when the reference returns 404.
+- Open risks/questions: optional media routes remain capability-dependent; direct TorrServer built-in TLS startup was not exercised, while reverse-proxy TLS and forwarded URL generation are covered; same-container repeat requires recreating the seeder because a full-file read does not reliably restore its peer lifecycle; branch/draft-PR creation is blocked by sandbox `.git` write restrictions and invalid GitHub auth.
+- Exact next action: accept the direct built-in TLS probe as a deployment follow-up or add a TLS-enabled TorrServer startup profile, then close R2 and hand off the contract suite to R6.
+- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, current working tree after R1.
+
+### Handoff 2026-09-20 — R2 complete
+- Status: done
+- Objective completed: reproducible TorrServer contract suite with 34 reference scenarios, raw corpus, semantic diff, compatibility matrix, deterministic media fixtures, seeder reset orchestration, HTTP reverse-proxy profile and direct TorrServer TLS profile.
+- Files/artifacts changed: `tools/contract/`, `tools/r2.sh`, `docker-compose.r2-proxy.yml`, `tools/baseline/docker/start-seeder.sh`, `tools/baseline/generate-fixtures.py`, `docs/implementation-plan.md`.
+- Commands/tests run: Python compile, shell syntax, JSON validation, Compose validation; reference capture `/tmp/rustorr-contract/20260920T144518Z` with 34 cases and 0 errors; proxy HTTP/TLS captures `/tmp/rustorr-contract/20260920T145209Z` and `/tmp/rustorr-contract/20260920T145806Z`; direct TorrServer TLS capture `/tmp/rustorr-contract/20260920T150748Z` with 0 errors; clean repeatability `/tmp/rustorr-contract/20260920T135227Z*` with normalized `equal=true`.
+- Evidence and results: API/control statuses, GET/HEAD, single/suffix/open/multipart Range, ETag/MIME/body capture, M3U with Unicode external tracks, VLC directives, ForkPlayer suffix, CORS, MCP, optional capability routes, reverse-proxy forwarded URLs and direct HTTPS behavior are recorded. The seeder uses `--encryption-tolerated` to interoperate with TorrServer's obfuscated peer handshake.
+- Decisions made: dynamic values are normalized only through manifest-declared policy; raw response bytes and hashes remain preserved; optional 404 capabilities remain visible rather than filtered; clean repeat runs recreate the one-shot seeder lifecycle.
+- Open risks/questions: production certificate rotation and auth deployment belong to R9; branch/draft-PR creation remains blocked by sandbox `.git` write restrictions and invalid GitHub auth.
+- Exact next action: start R3 engine spike with the pinned R1 scenarios, preserving R2 contract constraints.
+- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, Docker Compose baseline plus `docker-compose.r2-proxy.yml`, pinned TorrServer MatriX.145.

@@ -1,0 +1,53 @@
+{
+  "schema": "rustorr.r2.contract-scenarios.v1",
+  "reference": "TorrServer MatriX.145@2c7fa43b9ac64a9eda27314c0b6791518497f188",
+  "defaults": {
+    "torrent_link": "file:///fixtures/torrents/single.torrent",
+    "torrent_hash": "68c3ccdd52b2925f4f97e2f61ea248e728e54cea",
+    "media_link": "file:///fixtures/torrents/unicode.torrent",
+    "media_hash": "d272ca49e3f32a0a08c0c0599a0a9daa6bf5cb7d"
+  },
+  "normalization": {
+    "ignored_headers": ["date", "last-modified"],
+    "ignored_json_paths": ["timestamp", "half_open_peers", "pending_peers", "total_peers", "bytes_read", "bytes_read_data", "bytes_read_useful_data", "bytes_written", "chunks_read", "chunks_read_useful", "loaded_size", "pieces_dirtied_good", "preloaded_bytes"]
+  },
+  "scenarios": [
+    {"id": "torrents-list", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "list"}},
+    {"id": "torrents-invalid-json", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "raw_body": "{", "content_type": "application/json"},
+    {"id": "torrents-wipe", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "wipe"}},
+    {"id": "torrents-add-known", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}"}},
+    {"id": "torrents-add-media", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}"}},
+    {"id": "settings-get", "area": "settings", "classification": "required", "method": "GET", "path": "/settings"},
+    {"id": "settings-authenticated", "area": "access", "classification": "required", "method": "GET", "path": "/settings", "auth": true},
+    {"id": "settings-list", "area": "settings", "classification": "required", "method": "POST", "path": "/settings", "json": {"action": "get"}},
+    {"id": "cache-get", "area": "cache", "classification": "required", "method": "GET", "path": "/cache"},
+    {"id": "cache-list", "area": "cache", "classification": "required", "method": "POST", "path": "/cache", "json": {"action": "list"}},
+    {"id": "viewed-get", "area": "viewed", "classification": "required", "method": "GET", "path": "/viewed"},
+    {"id": "viewed-list", "area": "viewed", "classification": "required", "method": "POST", "path": "/viewed", "json": {"action": "list"}},
+    {"id": "stream-get", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play"},
+    {"id": "stream-head", "area": "stream", "classification": "required", "method": "HEAD", "path": "/stream?link=${torrent_link}&index=1&play"},
+    {"id": "stream-range", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play", "headers": {"Range": "bytes=0-65535"}},
+    {"id": "stream-suffix-range", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play", "headers": {"Range": "bytes=-65536"}},
+    {"id": "stream-open-range", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play", "headers": {"Range": "bytes=65536-"}},
+    {"id": "stream-multiple-range", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play", "headers": {"Range": "bytes=0-10,20-30"}},
+    {"id": "play-known", "area": "stream", "classification": "required", "method": "GET", "path": "/play?link=${torrent_link}&index=1"},
+    {"id": "playlist-all", "area": "playlist", "classification": "required", "method": "GET", "path": "/playlist"},
+    {"id": "playlist-item", "area": "playlist", "classification": "required", "method": "GET", "path": "/playlist/${torrent_hash}"},
+    {"id": "m3u-known", "area": "playlist", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&m3u"},
+    {"id": "m3u-forkplayer", "area": "playlist", "classification": "capability-specific", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&m3u&fn=file.m3u"},
+    {"id": "m3u-media", "area": "playlist", "classification": "required", "method": "GET", "path": "/stream?link=${media_link}&index=1&m3u"},
+    {"id": "m3u-media-forkplayer", "area": "playlist", "classification": "capability-specific", "method": "GET", "path": "/stream?link=${media_link}&index=1&m3u&fn=file.m3u"},
+    {"id": "search", "area": "search", "classification": "capability-specific", "method": "GET", "path": "/search?query=rustorr"},
+    {"id": "storage", "area": "storage", "classification": "capability-specific", "method": "GET", "path": "/storage"},
+    {"id": "tmdb", "area": "tmdb", "classification": "capability-specific", "method": "GET", "path": "/tmdb?query=rustorr"},
+    {"id": "gstreamer", "area": "gstreamer", "classification": "capability-specific", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&gstreamer", "headers": {"Range": "bytes=0-65535"}},
+    {"id": "ffprobe", "area": "ffprobe", "classification": "capability-specific", "method": "GET", "path": "/ffprobe?link=${torrent_link}&index=1"},
+    {"id": "cors-preflight", "area": "access", "classification": "required", "method": "OPTIONS", "path": "/torrents", "headers": {"Origin": "https://client.invalid", "Access-Control-Request-Method": "POST"}},
+    {"id": "forwarded-url", "area": "access", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&m3u", "headers": {"X-Forwarded-Host": "proxy.invalid", "X-Forwarded-Proto": "https"}},
+    {"id": "mcp-initialize", "area": "mcp", "classification": "capability-specific", "method": "POST", "path": "/mcp", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "rustorr-r2", "version": "1"}}}},
+    {"id": "webdav-options", "area": "webdav", "classification": "capability-specific", "method": "OPTIONS", "path": "/webdav/"},
+    {"id": "dlna-root", "area": "dlna", "classification": "capability-specific", "method": "GET", "path": "/dlna"},
+    {"id": "fuse-route", "area": "fuse", "classification": "capability-specific", "method": "GET", "path": "/fuse"},
+    {"id": "missing-route", "area": "errors", "classification": "required", "method": "GET", "path": "/r2-route-that-does-not-exist"}
+  ]
+}

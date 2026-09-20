@@ -1,0 +1,23 @@
+FROM golang:1.25-bookworm AS build
+
+ARG TORRSERVER_COMMIT=2c7fa43b9ac64a9eda27314c0b6791518497f188
+WORKDIR /src
+
+RUN git clone https://github.com/YouROK/TorrServer.git . \
+    && git checkout --detach "${TORRSERVER_COMMIT}"
+
+WORKDIR /src/server
+RUN go build -trimpath -ldflags='-s -w' -o /torrserver ./cmd
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /torrserver /usr/local/bin/TorrServer
+RUN chmod 0755 /usr/local/bin/TorrServer
+
+EXPOSE 8090
+ENTRYPOINT ["/usr/local/bin/TorrServer"]
+CMD ["-d", "/config", "-p", "8090"]

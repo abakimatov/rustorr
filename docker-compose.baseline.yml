@@ -1,0 +1,65 @@
+name: rustorr-r1
+
+services:
+  fixture:
+    build:
+      context: .
+      dockerfile: tools/baseline/docker/Dockerfile.tooling
+    command: ["python3", "/tools/generate-fixtures.py", "/data"]
+    volumes:
+      - fixture-data:/data
+      - ./tools/baseline:/tools:ro
+    networks: [baseline]
+
+  tracker:
+    build:
+      context: .
+      dockerfile: tools/baseline/docker/Dockerfile.tracker
+    expose: ["6969"]
+    depends_on:
+      fixture:
+        condition: service_completed_successfully
+    volumes:
+      - fixture-data:/data:ro
+    networks: [baseline]
+
+  seeder:
+    build:
+      context: .
+      dockerfile: tools/baseline/docker/Dockerfile.seeder
+    depends_on:
+      fixture:
+        condition: service_completed_successfully
+      tracker:
+        condition: service_started
+    volumes:
+      - fixture-data:/data
+    networks: [baseline]
+
+  torrserver:
+    build:
+      context: .
+      dockerfile: tools/baseline/docker/Dockerfile.torrserver
+    depends_on:
+      tracker:
+        condition: service_started
+      seeder:
+        condition: service_started
+    environment:
+      TS_PORT: "8090"
+      TS_PATH: /config
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - torrserver-state:/config
+      - fixture-data:/fixtures:ro
+    cap_add: [NET_ADMIN]
+    networks: [baseline]
+
+networks:
+  baseline:
+    driver: bridge
+
+volumes:
+  fixture-data:
+  torrserver-state:

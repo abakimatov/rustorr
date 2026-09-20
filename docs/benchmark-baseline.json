@@ -1,0 +1,53 @@
+{
+  "schema": "rustorr.r1.baseline.v1",
+  "reference": "TorrServer MatriX.145@2c7fa43b9ac64a9eda27314c0b6791518497f188",
+  "runs": [
+    "/tmp/rustorr-baseline/20260920T122045Z/measurement.json",
+    "/tmp/rustorr-baseline/20260920T122608Z/measurement.json"
+  ],
+  "method": {
+    "stall_threshold_ms": 2000,
+    "stall_definition": "request failure or request latency >= threshold; transport proxy, not decoded-player rebuffering",
+    "noise": [
+      "Docker Desktop scheduling and shared host CPU/storage",
+      "piece availability and peer handshake timing",
+      "cold Range latency includes cache/piece acquisition",
+      "peer departure can remain stall-free when the requested range is already cached"
+    ]
+  },
+  "rustorr_targets": {
+    "kind": "approved baseline-derived parity floors",
+    "cold_known_torrent_p95_ms": {"max": 10911.5},
+    "warm_known_torrent_p95_ms": {"max": 4976.2},
+    "seek_loaded_p95_ms": {"max": 4512.8},
+    "netem_range_p95_ms": {"max": 579.7},
+    "http_failed_requests": {"max": 0},
+    "peer_departure": {"required": "HTTP 206 and no unexplained request failure; decoded-player recovery requires a separate player-level test"},
+    "transport_stalls": {"required": "report separately by scenario; do not use as decoded-player rebuffering evidence"}
+  },
+  "latest_run": {
+    "path": "/tmp/rustorr-baseline/20260920T122608Z/measurement.json",
+    "failed_requests": 0,
+    "latency_ms": {"p50": 7.5, "p95": 10814.8},
+    "transport_stall_events": 12,
+    "resources": {
+      "rss_before": "25.89MiB",
+      "rss_after": "60MiB",
+      "cpu_before": "2.93%",
+      "cpu_after": "0.19%",
+      "net_io_after": "3.29MB / 10.4MB"
+    }
+  },
+  "scenarios": {
+    "cold-known-torrent": {"runs": 2, "latency_p95_ms": 10911.5, "status": "206"},
+    "cold-magnet-metadata": {"runs": 2, "metadata_p95_ms": 6058.5, "status": "connected"},
+    "warm-known-torrent": {"runs": 2, "latency_p95_ms": 4976.2, "status": "206"},
+    "seek-loaded": {"runs": 2, "seek_p95_ms": 4512.8, "transport_stalls": 4},
+    "seek-missing": {"runs": 2, "seek_p95_ms": 7995.3, "transport_stalls": 6},
+    "seek-evicted": {"runs": 2, "seek_p95_ms": 8507.9, "transport_stalls": 6, "precondition": "cold piece map; no deterministic TorrServer eviction API"},
+    "continuous-one-view": {"runs": 2, "latency_p95_ms": 4027.2, "transport_stalls": 28},
+    "continuous-three-views": {"runs": 2, "latency_p95_ms": 10.6, "transport_stalls": 0},
+    "netem-delay-loss": {"runs": 1, "latency_ms": 579.7, "status": "controlled", "apply_returncode": 0, "clear_returncode": 0},
+    "peer-departure": {"runs": 1, "recovery_ms": 3.9, "status": "controlled", "seeder_stop_returncode": 0, "transport_stalls": 0}
+  }
+}
