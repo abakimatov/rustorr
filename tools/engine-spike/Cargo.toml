@@ -1,0 +1,15 @@
+[package]
+name = "rustorr-engine-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+hex = "0.4"
+librqbit = "=9.0.1"
+librqbit-core = "=9.0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "time", "io-util"] }
