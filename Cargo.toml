@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# The R3 engine spike is an evidence tool with its own pinned lockfile, not
+# production code. Without this, cargo would refuse to build it from inside the
+# workspace directory tree.
+exclude = ["tools/engine-spike"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[workspace.dependencies]
+rustorr-domain = { path = "crates/rustorr-domain" }
+rustorr-engine = { path = "crates/rustorr-engine" }
+rustorr-cache = { path = "crates/rustorr-cache" }
+rustorr-state = { path = "crates/rustorr-state" }
+rustorr-http = { path = "crates/rustorr-http" }
+
+anyhow = "1"
+librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
+librqbit-core = { version = "=9.0.1", default-features = false }
+clap = { version = "4", features = ["derive", "env"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json = "1"
+tower = { version = "0.5", default-features = false }
+tower-http = { version = "0.6", default-features = false, features = ["trace", "catch-panic"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+tempfile = "3"
+tokio = "1"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

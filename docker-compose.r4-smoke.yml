@@ -1,0 +1,15 @@
+services:
+  rustorr:
+    image: ${RUSTORR_R4_SMOKE_IMAGE:-rustorr:r4-smoke-arm64}
+    environment:
+      # The smoke proves the server lifecycle, not peer discovery. Keeping it
+      # local avoids DHT traffic and makes the test independent of the host.
+      RUSTORR_DISABLE_DHT: "true"
+      RUSTORR_DISABLE_TRACKERS: "true"
+    ports:
+      - "127.0.0.1:${RUSTORR_R4_SMOKE_PORT:-8095}:8090"
+    volumes:
+      - rustorr-r4-smoke-data:/data
+
+volumes:
+  rustorr-r4-smoke-data:

@@ -1,0 +1,7 @@
+.git
+.baseline-runs
+.baseline-state
+target
+**/target
+tools/engine-spike
+docs

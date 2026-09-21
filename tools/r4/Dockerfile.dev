@@ -1,0 +1,20 @@
+# Development toolchain for the Rustorr workspace. The base image already ships
+# rustc 1.90.0 (matching rust-toolchain.toml) but not rustfmt or clippy; adding
+# them here keeps rustup from downloading them on every fresh container.
+FROM rust:1.90-bookworm
+
+# The production image is built on this arm64 host for both supported Linux
+# targets. Keep the cross toolchain here too, so the native dependencies
+# (aws-lc-sys and bundled SQLite) fail early instead of only during image build.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc-x86-64-linux-gnu \
+        libc6-dev-amd64-cross \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup component add rustfmt clippy \
+    && rustup target add x86_64-unknown-linux-gnu
+
+ENV CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+
+WORKDIR /workspace

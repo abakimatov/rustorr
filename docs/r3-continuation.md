@@ -92,15 +92,11 @@ HTTP routes и production cache ещё не реализованы — это р
 
 ## Exact next steps
 
-1. Начать R4: production workspace и engine-адаптер, повторяющий форму spike
-   (`Session`, `ManagedTorrent`, `TorrentStorage`), без протечки типов движка
-   в HTTP/cache/player слои.
-2. Реализовать Rustorr-кэш по ADR 0004: собственный индекс residency,
-   torrent-scoped LRU, pinned read window, громкая ошибка на отсутствующем
-   диапазоне.
-3. Прогнать `tools/baseline/r1.sh` против Rustorr HTTP surface с теми же
-   scenario IDs и сравнить с `rustorr_targets`.
-4. Отдельно закрыть три перенесённые performance-риска.
+R3 и R4 закрыты. Следующий этап — R5: lifecycle/cache coordinator и прогон
+`tools/baseline/r1.sh` против Rustorr. Актуальная точка входа —
+[`r4-continuation.md`](r4-continuation.md); три перенесённых performance-риска
+остаются за R5.
 
-После сессии добавить новый датированный handoff в
-[`docs/implementation-plan.md`](implementation-plan.md) и обновить этот файл.
+Этот файл исторический; новые handoff-записи ведутся в
+[`implementation-plan.md`](implementation-plan.md) и
+[`r4-continuation.md`](r4-continuation.md).

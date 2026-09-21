@@ -61,7 +61,7 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 
 Выход: Rustorr может запускать contract suite против эталона; различия не скрываются нормализацией динамических значений.
 
-### R3 — Engine spike и выбор движка (`in progress`)
+### R3 — Engine spike и выбор движка (`done`)
 
 Цель: проверить `librqbit` и при необходимости альтернативы на реальных сценариях R1.
 
@@ -69,7 +69,7 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 
 Выход: решение `adopt`, `fork` или `reject` с доказательствами; описаны upstream patches и стоимость сопровождения; выбранная политика хранения pieces совместима с cache semantics TorrServer.
 
-### R4 — Архитектурный skeleton Rustorr
+### R4 — Архитектурный skeleton Rustorr (`done`)
 
 Цель: создать каркас workspace без полного функционального наполнения.
 
@@ -77,11 +77,15 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 
 Выход: workspace собирается на Linux `x86_64` и `aarch64`; smoke server запускается бинарником и Docker; архитектурные границы записаны в ADR при наличии необратимого trade-off.
 
+Детальный план: [`docs/r4-plan.md`](r4-plan.md). Решено 2026-09-21: R4 — только каркас, без `/torrents`/`/stream`; прогон R1 против Rustorr перенесён в R5; состояние хранится в SQLite (`rusqlite`, bundled).
+
 ### R5 — Core torrent lifecycle и cache
 
 Цель: реализовать управляемый жизненный цикл торрента и RAM+SSD cache для приоритетных playback-сценариев.
 
 Задачи: add/load/drop, metadata, file selection, piece availability, reader ranges, preload/readahead, eviction, cancellation, restart persistence, global process budget и observability.
+
+Также: прогнать `tools/baseline/r1.sh` против Rustorr с теми же scenario IDs, включая `seek-evicted` с детерминированным вытеснением (ADR 0004), и объяснить два ~20-секундных случая, перенесённых из R3.
 
 Выход: controlled torrent streams проходят seek/restart/eviction tests; кэш не превышает согласованные лимиты; результаты сравнимы с R1.
 
@@ -152,10 +156,10 @@ Append this block to the stage file or this document after each session:
 
 ## Current checkpoint
 
-- Current stage: `R3` complete; R0–R2 are complete; `R4` is next.
-- Implementation status: Docker harness, deterministic fixture generation, known-torrent smoke and HTTP workload-matrix runner completed; one full matrix run is now recorded.
-- Latest smoke evidence: `/tmp/rustorr-baseline/20260920T122608Z`; controlled netem applied and cleared successfully, with Range `206` in 579.7 ms; peer departure stopped the seeder successfully and the post-departure Range returned `206` in 3.9 ms. Reviewed aggregate: [`docs/benchmark-baseline.json`](benchmark-baseline.json).
-- Next action: start R4 from [`docs/r3-continuation.md`](r3-continuation.md): production workspace and engine adapter over the adopted `librqbit 9.0.1`, the Rustorr-owned cache from [ADR 0004](adr/0004-cache-eviction-seam.md), then the R1 matrix against the Rustorr HTTP surface.
+- Current stage: `R4` done; R0–R4 are complete. R5 starts the cache/session lifecycle and R1 run against Rustorr.
+- Implementation status: six crates and `rustorr` binary, production multi-arch Dockerfile, non-root runtime, smoke compose, SQLite state and an HTTP skeleton. Nothing is committed; work remains on `r3-engine-spike` by explicit user decision.
+- Latest evidence: `tools/r4.sh check` (165 tests), `tools/r4.sh cross-build` for x86_64, and `tools/r4.sh smoke` for both images, HTTP, signal exit and persistent restart all exit 0. R2 corpus `/tmp/rustorr-contract/r4-20260921/` matches `/echo` and records 25 intended R6 differences. Details: [`docs/r4-plan.md`](r4-plan.md).
+- Next action: R5 from [`docs/r4-continuation.md`](r4-continuation.md); R1 remains a R5 gate.
 
 ### Handoff 2026-09-20 — R1
 - Status: done
@@ -258,3 +262,25 @@ Append this block to the stage file or this document after each session:
 - Open risks/questions: no HTTP Range or player measurement exists for the candidate; the first read after a magnet resolution (`20597.9 ms`) and torrent-scoped re-fetch (`~20.1 s`) are unexplained and probably share a cause in peer re-acquisition; piece-level eviction stays impossible without an upstream change.
 - Exact next action: start R4 — production workspace, engine adapter, Rustorr-owned cache per ADR 0004, then run `tools/baseline/r1.sh` against the Rustorr HTTP surface.
 - Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, working tree after the R3 closure changes, Docker Compose baseline plus `docker-compose.r3-engine.yml`, raw artifacts under `/tmp/rustorr-engine-spike/`.
+
+### Handoff 2026-09-21 — R4 steps 1–7
+- Status: in progress
+- Objective completed: the architectural skeleton up to a running server. Six-crate workspace with enforced boundaries, engine adapter and cache bridge, Rustorr-owned cache with two-phase eviction, SQLite state (schema v1), HTTP skeleton, and the `rustorr` binary with configuration, ordered startup and shutdown. Steps 8 (Docker, smoke, `x86_64`, R2 against the skeleton) and 9 (ADR 0005/0006, architecture document) remain.
+- Files/artifacts changed: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `crates/` (six crates), `tools/r4.sh`, `tools/r4/` (`Dockerfile.dev`, `check-boundaries.py`), `.gitignore`, `docs/r4-plan.md`, `docs/r4-continuation.md`, this plan, `docs/r3-continuation.md`.
+- Commands/tests run: `tools/r4.sh check` (exit 0, 165 tests); `tools/r4.sh build` (release, exit 0); a manual run of the release binary with `curl`, `SIGTERM` and log inspection; mutation checks per step; stability loops for the tests that use sockets and processes (HTTP 0 failures in 100 runs, process tests 0 in 15). `tools/r4.sh boundaries` includes negative tests of its own guards.
+- Evidence and results: per-step evidence is in [`docs/r4-plan.md`](r4-plan.md). Key results: five end-to-end tests run two real librqbit sessions on loopback and confirm the strict-storage contract (initial check survives an empty cache, `create` re-attaches, delete → `Cache::remove` → re-add refetches, a retained cache serves a file with no peer); process tests confirm signal handling, shutdown order, restart on the same data directory and failure exit codes.
+- Decisions made: features `rust-tls` for librqbit (OpenSSL out of the tree, guarded on every target); eviction is two-phase and driven from outside the cache; the cache limit is soft for torrents being watched; state in SQLite with `user_version` and `application_id`; settings stored as one verbatim JSON document; the wrong method on a known path is a 404 with no `Allow`, as in the reference; access layers are not created as empty placeholders; graceful shutdown is bounded by `--shutdown-grace`; the server runs on an explicit multi-thread runtime.
+- Errors found and fixed during the work: a hand-computed `application_id` literal that disagreed with its constant; an unstable log test written in step 6 and declared green after one run (9 failures in 60 parallel runs, fixed to 0 in 100); a measurement loop that mounted the build volume at the wrong path and reported 15/15 failures that were not real. Two mutation runs were first invalid because the mutated code did not compile.
+- Open risks/questions: the `x86_64` build of `aws-lc-sys` and bundled SQLite has not been attempted (native `aarch64` only); the `/echo` response format is from memory of the TorrServer API, not from the R2 corpus (the user accepted this as an assumption on 2026-09-21, to be closed by capturing the scenario from the reference); the `data` catalog column, the `timecode` type and the panic `500` body are assumptions; whether the engine really stops its tasks is observable only through our own log order; the R3 performance gates ran on the OpenSSL SHA-1 build while the shipped build uses `aws-lc-rs`.
+- Exact next action: step 8, first item — check that `aws-lc-sys` and SQLite cross-build for `x86_64-unknown-linux-gnu`, then write the `Dockerfile`, then the smoke command. Full list in [`docs/r4-continuation.md`](r4-continuation.md).
+- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, branch `r3-engine-spike`, HEAD `761589a` with an uncommitted working tree (the user declined a commit on 2026-09-21); Docker image `rustorr-r4-dev`, volumes `rustorr-r4-target` and `rustorr-r4-cargo`; host is `arm64` without a Rust toolchain, so everything runs through `tools/r4.sh`.
+
+### Handoff 2026-09-21 — R4 complete
+- Status: done
+- Objective completed: production skeleton is packaged for Linux arm64 and amd64, with a non-root runtime, lifecycle smoke and a captured R2 starting point; crate/state decisions and architecture are recorded.
+- Files/artifacts changed: `Dockerfile`, `.dockerignore`, `docker-compose.r4-smoke.yml`, `tools/r4.sh`, `tools/r4/Dockerfile.dev`, `/echo` contract scenario and response, ADR 0005/0006, `r4-architecture.md`, R4 documentation and this plan.
+- Commands/tests run: `tools/r4.sh check` (165 tests), `tools/r4.sh cross-build`, `tools/r4.sh smoke`; reference/candidate R2 capture and diff at `/tmp/rustorr-contract/r4-20260921/`.
+- Evidence and results: both production target images build; arm64 answers `/echo`, exits 0 after SIGTERM and restarts using the same SQLite volume. R2 captures `MatriX.145` from reference and Rustorr now matches it exactly; 25 differences are deliberate R6 routes.
+- Open risks/questions: R5 must connect the existing cache storage bridge to the engine and prove controlled eviction through HTTP/R1. R3 timing evidence used the OpenSSL SHA-1 build; R5 must measure the shipped aws-lc build. State fields `data`, `timecode` and panic-500 shape remain R6 contract questions.
+- Exact next action: implement R5 lifecycle coordinator, then run `tools/baseline/r1.sh` against Rustorr with deterministic eviction.
+- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, branch `r3-engine-spike`, HEAD `761589a`, intentionally uncommitted working tree; Docker development image `rustorr-r4-dev` and named volumes `rustorr-r4-target`, `rustorr-r4-cargo`.
