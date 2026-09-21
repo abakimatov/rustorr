@@ -12,6 +12,7 @@
     "ignored_json_paths": ["timestamp", "half_open_peers", "pending_peers", "total_peers", "bytes_read", "bytes_read_data", "bytes_read_useful_data", "bytes_written", "chunks_read", "chunks_read_useful", "loaded_size", "pieces_dirtied_good", "preloaded_bytes"]
   },
   "scenarios": [
+    {"id": "echo", "area": "access", "classification": "required", "method": "GET", "path": "/echo"},
     {"id": "torrents-list", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "list"}},
     {"id": "torrents-invalid-json", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "raw_body": "{", "content_type": "application/json"},
     {"id": "torrents-wipe", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "wipe"}},

@@ -1,0 +1,22 @@
+[package]
+name = "rustorr-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustorr-domain.workspace = true
+rustorr-cache.workspace = true
+anyhow.workspace = true
+librqbit.workspace = true
+librqbit-core.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "time"] }
+
+[lints]
+workspace = true

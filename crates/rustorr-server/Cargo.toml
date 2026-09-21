@@ -1,0 +1,28 @@
+[package]
+name = "rustorr-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rustorr"
+path = "src/main.rs"
+
+[dependencies]
+rustorr-engine.workspace = true
+rustorr-cache.workspace = true
+rustorr-state.workspace = true
+rustorr-http.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "signal", "sync", "time", "fs"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "json", "ansi"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
