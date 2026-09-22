@@ -6,6 +6,7 @@
 //! on every re-add) was first derived from reading librqbit's source.
 
 use std::{
+    io::SeekFrom,
     net::{Ipv4Addr, SocketAddr},
     path::Path,
     sync::Arc,
@@ -17,9 +18,9 @@ use librqbit::{
     ListenerOptions, ManagedTorrent, Session, SessionOptions, create_torrent,
     spawn_utils::BlockingSpawner, storage::StorageFactoryExt,
 };
-use rustorr_cache::{Cache, CacheConfig, MemoryStore, TorrentLayout};
+use rustorr_cache::{Cache, CacheConfig, DiskStore, MemoryStore, TorrentLayout};
 use rustorr_domain::{InfoHash, PieceIndex};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::CacheStorageFactory;
 
@@ -310,4 +311,47 @@ async fn re_adding_without_evicting_recovers_from_the_cache_alone() {
         "the retained cache must serve the file with no peer"
     );
     client.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_engine_reads_a_recovered_disk_range_without_a_peer() {
+    let fixture = Fixture::new().await;
+    let scratch = tempfile::tempdir().unwrap();
+    let disk = tempfile::tempdir().unwrap();
+    let (seeder_session, address) = seeder(&fixture, &scratch.path().join("seeder")).await;
+    let first_cache = Arc::new(Cache::new(
+        Arc::new(DiskStore::new(disk.path())),
+        CacheConfig::default(),
+    ));
+    let first_client = session(&scratch.path().join("first-client"), false).await;
+    let (id, handle) = add_to_cache(&first_client, &fixture, &first_cache, vec![address]).await;
+    assert!(read_file(&handle).await == fixture.data);
+    drop(handle);
+    first_client.delete(id.into(), false).await.unwrap();
+    first_client.stop().await;
+    seeder_session.stop().await;
+    drop(first_cache);
+
+    let recovered_cache = Arc::new(Cache::new(
+        Arc::new(DiskStore::new(disk.path())),
+        CacheConfig::default(),
+    ));
+    let restarted_client = session(&scratch.path().join("restarted-client"), false).await;
+    let (_, handle) = add_to_cache(&restarted_client, &fixture, &recovered_cache, vec![]).await;
+    let offset = 70_000;
+    let length = 48_000;
+    let mut stream = handle.clone().stream(0).await.unwrap();
+    stream.seek(SeekFrom::Start(offset as u64)).await.unwrap();
+    let mut bytes = vec![0; length];
+    tokio::time::timeout(TIMEOUT, stream.read_exact(&mut bytes))
+        .await
+        .expect("recovered range timed out")
+        .unwrap();
+
+    assert_eq!(bytes, fixture.data[offset..offset + length]);
+    assert_eq!(
+        recovered_cache.stats().stored_bytes,
+        fixture.data.len() as u64
+    );
+    restarted_client.stop().await;
 }

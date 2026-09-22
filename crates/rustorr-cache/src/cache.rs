@@ -109,14 +109,18 @@ impl Cache {
                 Err(Error::LayoutMismatch(torrent))
             };
         }
-        self.store.open(torrent, &layout)?;
+        let recovered = self.store.open(torrent, &layout)?;
         let last_read = state.next_tick();
+        let mut pieces = PieceSet::new(layout.piece_count());
+        for piece in recovered.completed_pieces {
+            pieces.insert(piece)?;
+        }
         state.torrents.insert(
             torrent,
             Entry {
-                pieces: PieceSet::new(layout.piece_count()),
+                pieces,
                 layout,
-                stored: 0,
+                stored: recovered.stored_bytes,
                 pins: 0,
                 last_read,
             },
@@ -167,6 +171,7 @@ impl Cache {
 
     /// Records that the engine completed and verified a piece.
     pub fn piece_completed(&self, torrent: InfoHash, piece: PieceIndex) -> Result<(), Error> {
+        self.store.piece_completed(torrent, piece)?;
         self.state().entry(torrent)?.pieces.insert(piece)
     }
 
@@ -182,6 +187,16 @@ impl Cache {
             cache: Arc::clone(self),
             torrent,
         })
+    }
+
+    /// Validates the lifecycle precondition for an engine delete without
+    /// changing cache state. The coordinator calls this before touching the
+    /// engine so a live playback can never cause a partial delete.
+    pub fn ensure_unpinned(&self, torrent: InfoHash) -> Result<(), Error> {
+        if self.state().entry(torrent)?.pins > 0 {
+            return Err(Error::Pinned(torrent));
+        }
+        Ok(())
     }
 
     /// Torrents to evict, least recently read first, until the cache would be
@@ -274,8 +289,8 @@ mod tests {
     }
 
     impl PieceStore for FakeStore {
-        fn open(&self, _: InfoHash, _: &TorrentLayout) -> Result<(), Error> {
-            Ok(())
+        fn open(&self, _: InfoHash, _: &TorrentLayout) -> Result<crate::Recovered, Error> {
+            Ok(crate::Recovered::default())
         }
 
         fn write(&self, _: InfoHash, _: FileIndex, _: u64, data: &[u8]) -> Result<u64, Error> {

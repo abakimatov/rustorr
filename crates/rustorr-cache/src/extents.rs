@@ -12,6 +12,28 @@ pub(crate) struct Extents {
 }
 
 impl Extents {
+    pub(crate) fn from_spans(spans: impl IntoIterator<Item = (u64, u64)>) -> Option<Self> {
+        let mut extents = Self::default();
+        for (start, end) in spans {
+            let range = ByteRange::new(start, end).ok()?;
+            // A persisted manifest is canonical: no overlaps or touching
+            // spans. Accepting a non-canonical one would make corruption
+            // indistinguishable from a valid recovery record.
+            if extents.insert(range) != end - start {
+                return None;
+            }
+        }
+        Some(extents)
+    }
+
+    pub(crate) fn spans(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        self.spans.iter().map(|(&start, &end)| (start, end))
+    }
+
+    pub(crate) fn total(&self) -> u64 {
+        self.total
+    }
+
     /// Adds `range` and returns how many bytes were not covered before.
     pub fn insert(&mut self, range: ByteRange) -> u64 {
         if range.is_empty() {

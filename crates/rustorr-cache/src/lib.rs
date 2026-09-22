@@ -21,4 +21,4 @@ pub use disk::DiskStore;
 pub use error::Error;
 pub use layout::TorrentLayout;
 pub use memory::MemoryStore;
-pub use store::PieceStore;
+pub use store::{PieceStore, Recovered};

@@ -7,13 +7,13 @@ import hashlib
 import json
 import pathlib
 import shutil
-import struct
 import sys
 from typing import Any
 
+from fixture_payload import SEED, payload
+
 TRACKER = b"http://tracker:6969/announce"
 PIECE_LENGTH = 256 * 1024
-SEED = b"rustorr-r1-fixture-v1"
 
 
 def bencode(value: Any) -> bytes:
@@ -29,15 +29,6 @@ def bencode(value: Any) -> bytes:
         items = sorted(value.items(), key=lambda item: item[0] if isinstance(item[0], bytes) else item[0].encode())
         return b"d" + b"".join(bencode(key) + bencode(item) for key, item in items) + b"e"
     raise TypeError(type(value).__name__)
-
-
-def payload(size: int, offset: int = 0) -> bytes:
-    output = bytearray()
-    counter = offset // len(SEED)
-    while len(output) < size:
-        output.extend(hashlib.sha256(SEED + struct.pack(">Q", counter)).digest())
-        counter += 1
-    return bytes(output[:size])
 
 
 def write_file(path: pathlib.Path, size: int) -> str:

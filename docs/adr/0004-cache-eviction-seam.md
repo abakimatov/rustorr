@@ -79,6 +79,25 @@ torrent produces silent corruption, not a cache miss.
 - Rustorr's cache cap becomes a first-class configuration value with a
   documented default, since it now directly determines eviction frequency.
 
+## R5 implementation note
+
+R5 installs the Rustorr `CacheStorageFactory` as librqbit's session storage
+factory and puts the deletion order in `TorrentCoordinator`: cancel and join
+prefetch, refuse a live playback pin, delete the live session, then remove its
+cache entry. A failed session delete leaves the engine registry, cache and
+catalog unchanged. Successful eviction saves live peer addresses for lazy
+re-add; ordinary product removal discards them. Disk cache recovery trusts an
+atomic manifest of extents and verified pieces, never sparse-file length.
+Forced eviction is reachable only through the benchmark-only Unix-socket
+control feature; it is not a production HTTP route.
+
+Two complete R5 HTTP runs measured deterministic `seek-evicted` at
+`9075.955 ms` p95 with correct HTTP 206 payloads and no control failure. The
+metric intentionally has no parity floor, and this evidence does not activate
+the piece-invalidation fork trigger. R5 was closed by explicit product decision
+with the separate `netem-delay-loss` deviation recorded, not treated as a
+passing performance gate; see [`r5-continuation.md`](../r5-continuation.md).
+
 ## Alternatives considered
 
 - **Piece-level LRU at the storage layer under a live torrent.** Rejected: two

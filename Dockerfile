@@ -5,6 +5,7 @@ ARG RUST_VERSION=1.90
 FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-bookworm AS build
 
 ARG TARGETARCH
+ARG RUSTORR_FEATURES=""
 WORKDIR /workspace
 
 # librqbit's rustls path builds aws-lc-sys, and state deliberately bundles
@@ -26,12 +27,14 @@ ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 
-RUN case "${TARGETARCH}" in \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
+    case "${TARGETARCH}" in \
         arm64) target=aarch64-unknown-linux-gnu ;; \
         amd64) target=x86_64-unknown-linux-gnu ;; \
         *) echo "unsupported target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && cargo build --locked --release --package rustorr-server --target "${target}" \
+    && cargo build --locked --release --package rustorr-server --target "${target}" ${RUSTORR_FEATURES:+--features "${RUSTORR_FEATURES}"} \
     && install -D -m 0755 "target/${target}/release/rustorr" /out/rustorr
 
 FROM debian:bookworm-slim AS runtime

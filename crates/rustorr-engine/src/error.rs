@@ -17,4 +17,8 @@ pub enum Error {
         expected: String,
         actual: String,
     },
+    #[error("torrent operation failed: {0}")]
+    Torrent(#[source] anyhow::Error),
+    #[error("torrent {0} is not active in the engine")]
+    NotLoaded(rustorr_domain::InfoHash),
 }

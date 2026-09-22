@@ -7,6 +7,7 @@ use anyhow::{Context, bail};
 use rustorr_cache::{Cache, CacheConfig, DiskStore, MemoryStore, PieceStore};
 use rustorr_engine::{Engine, EngineConfig, LibrqbitEngine};
 use rustorr_http::ServerInfo;
+use rustorr_lifecycle::TorrentCoordinator;
 use rustorr_state::State;
 use tokio::{
     net::TcpListener,
@@ -36,7 +37,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
                 config.data_dir.display()
             )
         })?;
-    let state = open_state(&config).await?;
+    let state = Arc::new(open_state(&config).await?);
     let schema_version = state
         .schema_version()
         .context("cannot read the schema version")?;
@@ -46,16 +47,29 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             cap_bytes: config.cache_size,
         },
     ));
-    let engine = LibrqbitEngine::start(EngineConfig {
-        data_dir: config.data_dir.join("engine"),
-        listen_port: Some(config.peer_port),
-        enable_dht: !config.disable_dht,
-        enable_trackers: !config.disable_trackers,
-    })
-    .await
-    .context("cannot start the BitTorrent engine")?;
+    let engine = Arc::new(
+        LibrqbitEngine::start(
+            EngineConfig {
+                data_dir: config.data_dir.join("engine"),
+                listen_port: Some(config.peer_port),
+                enable_dht: !config.disable_dht,
+                enable_trackers: !config.disable_trackers,
+            },
+            Arc::clone(&cache),
+        )
+        .await
+        .context("cannot start the BitTorrent engine")?,
+    );
 
     let engine_status = engine.status();
+    let engine_port: Arc<dyn Engine> = engine.clone();
+    let torrents = Arc::new(TorrentCoordinator::new(
+        engine_port,
+        Arc::clone(&cache),
+        Arc::clone(&state),
+    ));
+    #[cfg(feature = "r5-test-control")]
+    start_test_control(Arc::clone(&torrents)).await?;
     info!(
         %address,
         data_dir = %config.data_dir.display(),
@@ -67,7 +81,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         "listening"
     );
 
-    let outcome = serve_until_signalled(listener, &mut signals, config.shutdown_grace).await;
+    let outcome =
+        serve_until_signalled(listener, &mut signals, config.shutdown_grace, torrents).await;
 
     // Reverse order of startup, whatever ended the server.
     engine.shutdown().await;
@@ -76,6 +91,58 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     drop(state);
     info!("state closed");
     outcome
+}
+
+/// The benchmark image opts into this Unix-socket control plane. It is not
+/// compiled into the production image and cannot become an HTTP contract.
+#[cfg(feature = "r5-test-control")]
+async fn start_test_control(torrents: Arc<TorrentCoordinator>) -> anyhow::Result<()> {
+    use std::path::PathBuf;
+
+    use rustorr_domain::InfoHash;
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::UnixListener,
+    };
+
+    let Some(path) = std::env::var_os("RUSTORR_TEST_CONTROL_SOCKET").map(PathBuf::from) else {
+        return Ok(());
+    };
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .with_context(|| format!("cannot remove old control socket {}", path.display()))?;
+    }
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("cannot bind test control socket {}", path.display()))?;
+    info!(path = %path.display(), "R5 test control ready");
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            let torrents = Arc::clone(&torrents);
+            tokio::spawn(async move {
+                let (read, mut write) = stream.into_split();
+                let mut lines = BufReader::new(read).lines();
+                let response = match lines.next_line().await {
+                    Ok(Some(command)) => match command.strip_prefix("evict ") {
+                        Some(hash) => match hash.parse::<InfoHash>() {
+                            Ok(hash) => match torrents.evict(hash).await {
+                                Ok(freed) => format!("ok {freed}\n"),
+                                Err(error) => format!("error {error}\n"),
+                            },
+                            Err(error) => format!("error {error}\n"),
+                        },
+                        None => "error expected `evict <infohash>`\n".into(),
+                    },
+                    Ok(None) => "error empty command\n".into(),
+                    Err(error) => format!("error {error}\n"),
+                };
+                let _ = write.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    Ok(())
 }
 
 /// The state API is synchronous, so it is opened off the async threads.
@@ -99,6 +166,7 @@ async fn serve_until_signalled(
     listener: TcpListener,
     signals: &mut Signals,
     grace: Duration,
+    torrents: Arc<TorrentCoordinator>,
 ) -> anyhow::Result<()> {
     let (stop, stopped) = oneshot::channel::<()>();
     let info = ServerInfo {
@@ -107,7 +175,7 @@ async fn serve_until_signalled(
         // of Rustorr's package version.
         version: "MatriX.145".into(),
     };
-    let server = rustorr_http::serve(listener, info, async move {
+    let server = rustorr_http::serve_with_lifecycle(listener, info, torrents, async move {
         let _ = stopped.await;
     });
     tokio::pin!(server);

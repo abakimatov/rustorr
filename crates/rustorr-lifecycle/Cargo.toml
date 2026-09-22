@@ -1,0 +1,22 @@
+[package]
+name = "rustorr-lifecycle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustorr-cache.workspace = true
+rustorr-domain.workspace = true
+rustorr-engine.workspace = true
+rustorr-state.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "rt", "time"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

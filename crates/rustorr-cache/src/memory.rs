@@ -5,7 +5,7 @@ use std::{
 
 use rustorr_domain::{FileIndex, InfoHash};
 
-use crate::{Error, PieceStore, TorrentLayout, extents::Extents};
+use crate::{Error, PieceStore, Recovered, TorrentLayout, extents::Extents};
 
 /// Matches the BitTorrent chunk size, so a chunk-aligned write fills a block.
 const BLOCK_SIZE: usize = 16 * 1024;
@@ -49,7 +49,7 @@ fn lock(torrent: &Mutex<Torrent>) -> MutexGuard<'_, Torrent> {
 }
 
 impl PieceStore for MemoryStore {
-    fn open(&self, torrent: InfoHash, layout: &TorrentLayout) -> Result<(), Error> {
+    fn open(&self, torrent: InfoHash, layout: &TorrentLayout) -> Result<Recovered, Error> {
         let files = (0..layout.file_count()).map(|_| File::default()).collect();
         let created = Arc::new(Mutex::new(Torrent {
             layout: layout.clone(),
@@ -59,7 +59,7 @@ impl PieceStore for MemoryStore {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(torrent, created);
-        Ok(())
+        Ok(Recovered::default())
     }
 
     fn write(

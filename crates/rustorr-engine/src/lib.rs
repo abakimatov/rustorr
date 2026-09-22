@@ -16,4 +16,7 @@ pub use adapter::LibrqbitEngine;
 pub use cache_storage::{CacheStorage, CacheStorageFactory};
 pub use config::EngineConfig;
 pub use error::Error;
-pub use port::{Engine, EngineStatus};
+pub use port::{
+    AddOptions, DeletedTorrent, Engine, EngineFuture, EngineStatus, TorrentMetadata, TorrentReader,
+    TorrentSource, TorrentStatus,
+};

@@ -10,7 +10,7 @@
     {"id": "seek-evicted", "views": 1, "state": "evicted", "input": "torrent", "metrics": ["seek_ms", "stalls"]},
     {"id": "continuous-one-view", "views": 1, "state": "warm", "input": "torrent", "metrics": ["stalls", "rss", "cpu", "disk", "network"]},
     {"id": "continuous-three-views", "views": 3, "state": "warm", "input": "torrent", "metrics": ["stalls", "rss", "cpu", "disk", "network"]},
-    {"id": "netem-delay-loss", "views": 1, "state": "warm", "input": "torrent", "network": {"delay_ms": 80, "loss_percent": 1}, "metrics": ["client_start_ms", "seek_ms", "stalls"]},
+    {"id": "netem-delay-loss", "views": 1, "state": "warm", "input": "torrent", "samples": 20, "network": {"delay_ms": 80, "loss_percent": 1}, "metrics": ["latency_p95_ms", "stalls"]},
     {"id": "peer-departure", "views": 1, "state": "warm", "input": "torrent", "network": {"stop_fast_seeder": true}, "metrics": ["stalls", "recovery_ms"]}
   ]
 }

@@ -53,7 +53,7 @@ Floors are from [`benchmark-baseline.json`](benchmark-baseline.json)
 | `continuous-three-views` | p95 ≤ 10.6 ms | three concurrent views, cold session | 4233.4–8764.1 ms | **no** — R3 was cold | no verdict; must be re-measured warm |
 | `cold-magnet-metadata` | p95 ≤ 6058.5 ms | magnet metadata resolution | 2855.9 ms | yes | not ruled out |
 | `http_failed_requests` | 0 | n/a — no HTTP surface in R3 | — | no | only R4 can answer |
-| `netem-delay-loss` | 579.7 ms | not exercised in R3 | — | no | only R4 can answer |
+| `netem-delay-loss` | per-run p95 ≤ 988.317 ms, 20 samples/run | not exercised in R3 | — | no | only R4 can answer |
 | `peer-departure` | 206, no unexplained failure | not exercised in R3 | — | no | only R4 can answer |
 
 Resource comparison: TorrServer sampled `25.89 MiB` → `60 MiB` RSS; the spike

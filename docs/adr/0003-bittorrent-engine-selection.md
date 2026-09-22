@@ -63,6 +63,16 @@ seek and magnet protocols the engine is well inside every comparable floor. A
 defect in the spike's own `initialized_ms` field, which measured total run
 time, was found and fixed while doing that comparison.
 
+**R5 HTTP follow-up.** Two complete Rustorr runs
+(`20260921T150704Z`, `20260921T150836Z`) put the production adapter, cache and
+HTTP Range path around the engine with zero request or integrity errors. The
+magnet first-Range p95 is `5555.989 ms`; deterministic torrent eviction and
+re-add is bounded at `9075.955 ms`. Neither metric has a parity floor, but the
+earlier roughly 20-second observations did not reproduce. The fork trigger is
+therefore not activated by R5 evidence. R5 was closed by explicit product
+decision with its unrelated netem latency deviation recorded, not treated as a
+passing performance gate; see [`r5-continuation.md`](../r5-continuation.md).
+
 ## Why adopt rather than fork or reject
 
 Every capability Rustorr needs for R4 is present and evidenced in the pinned

@@ -14,13 +14,15 @@ ALLOWED = {
     "rustorr-engine": {"rustorr-domain", "rustorr-cache"},
     "rustorr-cache": {"rustorr-domain"},
     "rustorr-state": {"rustorr-domain"},
-    "rustorr-http": {"rustorr-domain", "rustorr-engine", "rustorr-cache", "rustorr-state"},
+    "rustorr-lifecycle": {"rustorr-domain", "rustorr-engine", "rustorr-cache", "rustorr-state"},
+    "rustorr-http": {"rustorr-lifecycle"},
     "rustorr-server": {
         "rustorr-domain",
         "rustorr-engine",
         "rustorr-cache",
         "rustorr-state",
         "rustorr-http",
+        "rustorr-lifecycle",
     },
 }
 
