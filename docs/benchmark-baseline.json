@@ -15,12 +15,23 @@
       "peer departure can remain stall-free when the requested range is already cached"
     ]
   },
+  "netem_rebaseline": {
+    "reason": "the original 579.7 ms value was one controlled request, not a two-run p95",
+    "network": {"delay_ms": 80, "loss_percent": 1},
+    "samples_per_run": 20,
+    "runs": [
+      "/tmp/rustorr-baseline/20260921T163650Z/measurement.json",
+      "/tmp/rustorr-baseline/20260921T163912Z/measurement.json"
+    ],
+    "run_p95_ms": [988.317, 986.719],
+    "floor_rule": "maximum per-run p95"
+  },
   "rustorr_targets": {
     "kind": "approved baseline-derived parity floors",
     "cold_known_torrent_p95_ms": {"max": 10911.5},
     "warm_known_torrent_p95_ms": {"max": 4976.2},
     "seek_loaded_p95_ms": {"max": 4512.8},
-    "netem_range_p95_ms": {"max": 579.7},
+    "netem_range_p95_ms": {"max": 988.317, "samples_per_run": 20, "runs": 2},
     "http_failed_requests": {"max": 0},
     "peer_departure": {"required": "HTTP 206 and no unexplained request failure; decoded-player recovery requires a separate player-level test"},
     "transport_stalls": {"required": "report separately by scenario; do not use as decoded-player rebuffering evidence"}
@@ -47,7 +58,7 @@
     "seek-evicted": {"runs": 2, "seek_p95_ms": 8507.9, "transport_stalls": 6, "precondition": "cold piece map; no deterministic TorrServer eviction API"},
     "continuous-one-view": {"runs": 2, "latency_p95_ms": 4027.2, "transport_stalls": 28},
     "continuous-three-views": {"runs": 2, "latency_p95_ms": 10.6, "transport_stalls": 0},
-    "netem-delay-loss": {"runs": 1, "latency_ms": 579.7, "status": "controlled", "apply_returncode": 0, "clear_returncode": 0},
+    "netem-delay-loss": {"runs": 2, "samples_per_run": 20, "run_p95_ms": [988.317, 986.719], "latency_p95_ms": 988.317, "status": "controlled", "apply_returncode": 0, "clear_returncode": 0},
     "peer-departure": {"runs": 1, "recovery_ms": 3.9, "status": "controlled", "seeder_stop_returncode": 0, "transport_stalls": 0}
   }
 }

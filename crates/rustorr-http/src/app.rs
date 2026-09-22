@@ -1,14 +1,18 @@
-use std::{any::Any, future::Future, io};
+use std::{any::Any, future::Future, io, sync::Arc};
 
 use axum::{
     Router,
     body::Body,
-    extract::State,
+    extract::{Json, Query, State},
     http::{Request, Response, StatusCode, header},
     middleware::map_response,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
+use rustorr_lifecycle::TorrentCoordinator;
+use serde_json::{Value, json};
+use tokio::io::AsyncReadExt;
+use tokio_util::io::ReaderStream;
 use tower_http::{
     catch_panic::CatchPanicLayer,
     trace::{DefaultOnResponse, TraceLayer},
@@ -23,9 +27,21 @@ pub struct ServerInfo {
     pub version: String,
 }
 
+#[derive(Clone)]
+struct PlaybackState {
+    info: ServerInfo,
+    torrents: Arc<TorrentCoordinator>,
+}
+
 /// The HTTP application.
 pub fn router(info: ServerInfo) -> Router {
     with_layers(routes(info))
+}
+
+/// R5's deliberately narrow R1 workload surface. R6 replaces this with the
+/// contract-complete TorrServer router.
+pub fn router_with_lifecycle(info: ServerInfo, torrents: Arc<TorrentCoordinator>) -> Router {
+    with_layers(playback_routes(PlaybackState { info, torrents }))
 }
 
 /// Serves the application on `listener` until `shutdown` completes, then stops
@@ -42,6 +58,27 @@ pub async fn serve(
     axum::serve(listener, router(info))
         .with_graceful_shutdown(shutdown)
         .await
+}
+
+pub async fn serve_with_lifecycle(
+    listener: tokio::net::TcpListener,
+    info: ServerInfo,
+    torrents: Arc<TorrentCoordinator>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    axum::serve(listener, router_with_lifecycle(info, torrents))
+        .with_graceful_shutdown(shutdown)
+        .await
+}
+
+fn playback_routes(state: PlaybackState) -> Router {
+    Router::new()
+        .route("/echo", get(echo_playback))
+        .route("/torrents", post(torrents))
+        .route("/stream", get(stream))
+        .with_state(state)
+        .fallback(not_found)
+        .method_not_allowed_fallback(not_found)
 }
 
 fn routes(info: ServerInfo) -> Router {
@@ -66,6 +103,142 @@ async fn without_allow_on_404(mut response: Response<Body>) -> Response<Body> {
 
 async fn echo(State(info): State<ServerInfo>) -> String {
     info.version
+}
+
+async fn echo_playback(State(state): State<PlaybackState>) -> String {
+    state.info.version
+}
+
+#[derive(serde::Deserialize)]
+struct TorrentAction {
+    action: String,
+    link: Option<String>,
+}
+
+fn lifecycle_error(error: impl std::fmt::Display) -> ApiError {
+    ApiError::Json {
+        status: StatusCode::BAD_REQUEST,
+        message: error.to_string(),
+    }
+}
+
+async fn torrents(
+    State(state): State<PlaybackState>,
+    Json(action): Json<TorrentAction>,
+) -> Result<Json<Value>, ApiError> {
+    match action.action.as_str() {
+        "add" => {
+            let link = action
+                .link
+                .ok_or_else(|| lifecycle_error("add requires link"))?;
+            let entry = state
+                .torrents
+                .add_link(&link)
+                .await
+                .map_err(lifecycle_error)?;
+            Ok(Json(json!({"hash": entry.hash.to_string()})))
+        }
+        "list" => {
+            let entries = state.torrents.list().map_err(lifecycle_error)?;
+            let mut response = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let status = state.torrents.status(entry.hash).await;
+                response.push(json!({
+                    "hash": entry.hash.to_string(),
+                    "stat": if status.ready { 3 } else { 0 },
+                    "connected_seeders": status.live_peers,
+                }));
+            }
+            Ok(Json(Value::Array(response)))
+        }
+        "wipe" => {
+            for entry in state.torrents.list().map_err(lifecycle_error)? {
+                state
+                    .torrents
+                    .drop_torrent(entry.hash)
+                    .await
+                    .map_err(lifecycle_error)?;
+            }
+            Ok(Json(Value::Null))
+        }
+        _ => Err(lifecycle_error("unsupported R5 torrent action")),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct StreamQuery {
+    link: String,
+    index: u32,
+}
+
+fn requested_range(
+    value: Option<&axum::http::HeaderValue>,
+) -> Result<(u64, Option<u64>), ApiError> {
+    let Some(value) = value else {
+        return Ok((0, None));
+    };
+    let text = value
+        .to_str()
+        .map_err(|_| lifecycle_error("invalid Range header"))?;
+    let bytes = text
+        .strip_prefix("bytes=")
+        .ok_or_else(|| lifecycle_error("only bytes ranges are supported"))?;
+    let (start, end) = bytes
+        .split_once('-')
+        .ok_or_else(|| lifecycle_error("invalid Range header"))?;
+    if start.is_empty() || bytes.contains(',') {
+        return Err(lifecycle_error("invalid Range header"));
+    }
+    let start = start
+        .parse()
+        .map_err(|_| lifecycle_error("invalid Range start"))?;
+    let end = (!end.is_empty())
+        .then(|| end.parse())
+        .transpose()
+        .map_err(|_| lifecycle_error("invalid Range end"))?;
+    Ok((start, end))
+}
+
+async fn stream(
+    State(state): State<PlaybackState>,
+    Query(query): Query<StreamQuery>,
+    request: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    let (start, requested_end) = requested_range(request.headers().get(header::RANGE))?;
+    let entry = state
+        .torrents
+        .add_link(&query.link)
+        .await
+        .map_err(lifecycle_error)?;
+    let reader = state
+        .torrents
+        .play(entry.hash, query.index, start)
+        .await
+        .map_err(lifecycle_error)?;
+    let length = reader.file_length();
+    if start >= length {
+        return Err(ApiError::Status(StatusCode::RANGE_NOT_SATISFIABLE));
+    }
+    let end = requested_end.unwrap_or(length - 1).min(length - 1);
+    if end < start {
+        return Err(ApiError::Status(StatusCode::RANGE_NOT_SATISFIABLE));
+    }
+    let body_length = end - start + 1;
+    state
+        .torrents
+        .schedule_prefetch(entry.hash, query.index, end.saturating_add(1))
+        .await;
+    let body = Body::from_stream(ReaderStream::new(reader.take(body_length)));
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, body_length)
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{length}"),
+        )
+        .body(body)
+        .map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
 async fn not_found() -> ApiError {
@@ -220,6 +393,26 @@ mod tests {
 
     async fn panics() -> &'static str {
         panic!("boom")
+    }
+
+    #[test]
+    fn r5_range_parser_accepts_closed_and_open_ended_ranges() {
+        assert_eq!(
+            requested_range(Some(&header::HeaderValue::from_static("bytes=10-99"))).unwrap(),
+            (10, Some(99))
+        );
+        assert_eq!(
+            requested_range(Some(&header::HeaderValue::from_static("bytes=10-"))).unwrap(),
+            (10, None)
+        );
+        assert_eq!(requested_range(None).unwrap(), (0, None));
+    }
+
+    #[test]
+    fn r5_range_parser_rejects_suffix_and_multi_ranges() {
+        for value in ["bytes=-99", "bytes=0-1,4-5", "items=0-1", "bytes=bad-1"] {
+            assert!(requested_range(Some(&header::HeaderValue::from_static(value))).is_err());
+        }
     }
 
     fn panicking_app() -> Router {

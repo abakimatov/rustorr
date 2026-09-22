@@ -7,5 +7,5 @@
 mod app;
 mod error;
 
-pub use app::{ServerInfo, router, serve};
+pub use app::{ServerInfo, router, router_with_lifecycle, serve, serve_with_lifecycle};
 pub use error::ApiError;

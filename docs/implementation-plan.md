@@ -89,6 +89,14 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 
 Выход: controlled torrent streams проходят seek/restart/eviction tests; кэш не превышает согласованные лимиты; результаты сравнимы с R1.
 
+Implementation status (2026-09-22): done by explicit product decision.
+Lifecycle, cache recovery, deterministic eviction, restart probe and benchmark
+hardening are implemented. Two complete release runs have zero
+functional/control/integrity errors. The approved netem gate remains a recorded
+deviation (`1518.228`/`1652.650 ms` against `988.317 ms`), not a passing claim;
+the paired idle diagnosis found no reproducible Rustorr transport defect. See
+[`r5-continuation.md`](r5-continuation.md).
+
 ### R6 — HTTP streaming и совместимый API
 
 Цель: сделать существующие клиенты работоспособными без изменений.
@@ -156,10 +164,23 @@ Append this block to the stage file or this document after each session:
 
 ## Current checkpoint
 
-- Current stage: `R4` done; R0–R4 are complete. R5 starts the cache/session lifecycle and R1 run against Rustorr.
-- Implementation status: six crates and `rustorr` binary, production multi-arch Dockerfile, non-root runtime, smoke compose, SQLite state and an HTTP skeleton. Nothing is committed; work remains on `r3-engine-spike` by explicit user decision.
-- Latest evidence: `tools/r4.sh check` (165 tests), `tools/r4.sh cross-build` for x86_64, and `tools/r4.sh smoke` for both images, HTTP, signal exit and persistent restart all exit 0. R2 corpus `/tmp/rustorr-contract/r4-20260921/` matches `/echo` and records 25 intended R6 differences. Details: [`docs/r4-plan.md`](r4-plan.md).
-- Next action: R5 from [`docs/r4-continuation.md`](r4-continuation.md); R1 remains a R5 gate.
+- Current stage: `R6` ready; R0–R5 are complete.
+- Implementation status: lifecycle/cache stabilization and the hardened R1
+  runner are complete. The workspace has seven crates, including
+  `rustorr-lifecycle`; production packaging remains non-root and multi-arch.
+- Latest valid evidence: `tools/r4.sh check` passes 179 tests; the feature
+  suite passes. Reference runs `20260921T163650Z` and `20260921T163912Z` and
+  candidate runs `20260921T164519Z` and `20260921T164721Z` all complete the
+  repeated netem sample set. The candidate pair has zero
+  request/integrity/precondition/control errors. Restart artifact
+  `20260921T151011Z-restart` proves a cached 206 after restart without a peer.
+- Accepted deviation: the approved two-run, 20-sample netem floor is
+  `988.317 ms`, while Rustorr's per-run p95 values are `1518.228 ms` and
+  `1652.650 ms`. The paired idle transport diagnosis found no reproducible
+  Rustorr defect; the user accepted R5 closure without representing this as a
+  passing gate. The evidence and re-open procedure are in
+  [`r5-continuation.md`](r5-continuation.md).
+- Next action: begin R6 HTTP/API compatibility work.
 
 ### Handoff 2026-09-20 — R1
 - Status: done

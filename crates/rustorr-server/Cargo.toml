@@ -9,14 +9,19 @@ publish.workspace = true
 name = "rustorr"
 path = "src/main.rs"
 
+[features]
+r5-test-control = []
+
 [dependencies]
+rustorr-domain.workspace = true
 rustorr-engine.workspace = true
 rustorr-cache.workspace = true
 rustorr-state.workspace = true
 rustorr-http.workspace = true
+rustorr-lifecycle.workspace = true
 anyhow.workspace = true
 clap.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "signal", "sync", "time", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "signal", "sync", "time", "fs", "io-util"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json", "ansi"] }
 

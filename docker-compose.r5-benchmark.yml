@@ -1,0 +1,26 @@
+services:
+  rustorr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        RUSTORR_FEATURES: r5-test-control
+    depends_on:
+      tracker:
+        condition: service_started
+      seeder:
+        condition: service_started
+    environment:
+      RUSTORR_DISABLE_DHT: "true"
+      RUSTORR_TEST_CONTROL_SOCKET: /control/control.sock
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - rustorr-r5-state:/data
+      - fixture-data:/fixtures:ro
+      - ${RUSTORR_R5_CONTROL_DIR:-/tmp/rustorr-r5-control}:/control
+    cap_add: [NET_ADMIN]
+    networks: [baseline]
+
+volumes:
+  rustorr-r5-state:
