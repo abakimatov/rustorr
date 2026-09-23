@@ -107,6 +107,15 @@ capture() {
   run_id=${RUSTORR_CONTRACT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
   output_dir=${RUN_ROOT}/${run_id}
   mkdir -p "${output_dir}"
+  if [ "${profile}" = r7 ]; then
+    # Both targets announce the same Bonjour and DLNA names on the discovery
+    # network; only the target under test may be running.
+    if [ "${target}" = reference ]; then
+      ${candidate_compose} stop rustorr
+    else
+      ${reference_compose} stop torrserver
+    fi
+  fi
   if [ "${RUSTORR_RESET_SEEDER:-1}" = 1 ]; then
     reset_seeder
     if [ "${target}" = reference ]; then

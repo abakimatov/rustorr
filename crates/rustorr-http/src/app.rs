@@ -38,6 +38,7 @@ use tracing::{Level, error, info_span};
 use crate::{
     ApiError,
     access::{HttpConfig, WafSnapshot},
+    discovery::{Discovery, DiscoveryChange, NoDiscovery},
     error::go_json,
     m3u,
     msx_api::{self, Msx},
@@ -55,6 +56,7 @@ pub struct ServerInfo {
 pub struct Integrations {
     pub search: Arc<dyn Search>,
     pub msx: Arc<Msx>,
+    pub discovery: Arc<dyn Discovery>,
 }
 
 impl Default for Integrations {
@@ -63,6 +65,7 @@ impl Default for Integrations {
         Self {
             search: Arc::new(search_api::NoSearch),
             msx: Arc::new(Msx::detached()),
+            discovery: Arc::new(NoDiscovery),
         }
     }
 }
@@ -467,12 +470,26 @@ async fn torrents(
             return Err(json_bad_request(format!("unknown action: \"{other}\"")).into_response());
         }
     };
-    match state
+    let changes_catalog = matches!(
+        command,
+        TorrentCommand::Add(_) | TorrentCommand::Remove(_) | TorrentCommand::Wipe
+    );
+    let reply = state
         .core
         .torrents(command)
         .await
-        .map_err(|error| lifecycle(error).into_response())?
+        .map_err(|error| lifecycle(error).into_response())?;
+    // MatriX.145 restarts its DLNA server after these, when it is enabled.
+    if changes_catalog
+        && state
+            .core
+            .settings(SettingsCommand::Get)
+            .await
+            .is_ok_and(|settings| settings.enable_dlna)
     {
+        state.integrations.discovery.catalog_changed().await;
+    }
+    match reply {
         TorrentReply::Torrent(Some(torrent)) => {
             json_response(torrent).map_err(IntoResponse::into_response)
         }
@@ -571,6 +588,7 @@ async fn settings(
     let request: SettingsAction = json_body(request)
         .await
         .map_err(IntoResponse::into_response)?;
+    let requested = request.sets.clone();
     let command = match request.action.as_str() {
         "get" => SettingsCommand::Get,
         "set" => SettingsCommand::Set(Box::new(
@@ -586,8 +604,20 @@ async fn settings(
         .settings(command)
         .await
         .map_err(|error| lifecycle(error).into_response())?;
-    // MatriX.145 restarts Rutor search on every change, following the
-    // settings it now has.
+    // MatriX.145 restarts DLNA and Bonjour, then Rutor search, on every
+    // change.
+    let change = match (request.action.as_str(), requested) {
+        ("set", Some(requested)) => Some(DiscoveryChange::Set {
+            dlna: requested.enable_dlna,
+            bonjour: requested.enable_bonjour,
+            settings: Box::new(settings.clone()),
+        }),
+        ("def", _) => Some(DiscoveryChange::Defaults),
+        _ => None,
+    };
+    if let Some(change) = change {
+        state.integrations.discovery.settings_changed(change).await;
+    }
     if request.action != "get" {
         state
             .integrations

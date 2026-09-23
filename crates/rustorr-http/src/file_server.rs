@@ -449,6 +449,136 @@ async fn serve_content(
     response
 }
 
+/// `http.ServeContent` over bytes in memory, with the content type already
+/// chosen; `modified` is `None` for Go's zero time, which sends no
+/// `Last-Modified` and skips date conditions.
+pub(crate) fn serve_memory(
+    bytes: Bytes,
+    content_type: &str,
+    modified: Option<u64>,
+    method: &Method,
+    headers: &HeaderMap,
+) -> Response<Body> {
+    let request = FileRequest {
+        path: "",
+        query: None,
+        method,
+        headers,
+    };
+    let range_header = match preconditions(&request, modified) {
+        Precondition::Failed => {
+            let mut response = StatusCode::PRECONDITION_FAILED.into_response();
+            set_last_modified(response.headers_mut(), modified);
+            return response;
+        }
+        Precondition::NotModified => return not_modified(modified),
+        Precondition::Proceed(range) => range,
+    };
+    let size = bytes.len() as u64;
+    let ranges = match range_header.map(|value| range::parse(&value, size)) {
+        None => Vec::new(),
+        Some(Ok(ranges)) if ranges.iter().map(|range| range.len()).sum::<u64>() > size => {
+            Vec::new()
+        }
+        Some(Ok(ranges)) => ranges,
+        Some(Err(RangeError::Unsatisfiable)) if size == 0 => Vec::new(),
+        Some(Err(RangeError::Unsatisfiable)) => {
+            let mut response = go_http_error(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                "invalid range: failed to overlap",
+            );
+            response.headers_mut().insert(
+                header::CONTENT_RANGE,
+                header_value(&format!("bytes */{size}")),
+            );
+            return response;
+        }
+        Some(Err(RangeError::Invalid)) => {
+            return go_http_error(StatusCode::RANGE_NOT_SATISFIABLE, "invalid range");
+        }
+    };
+    let head = *method == Method::HEAD;
+    let slice = |range: &ByteRange| {
+        bytes.slice(
+            usize::try_from(range.start).expect("fits")..=usize::try_from(range.end).expect("fits"),
+        )
+    };
+    let mut response = match ranges.as_slice() {
+        [] => {
+            let mut response = Response::new(if head {
+                Body::empty()
+            } else {
+                Body::from(bytes.clone())
+            });
+            response
+                .headers_mut()
+                .insert(header::CONTENT_TYPE, header_value(content_type));
+            response
+                .headers_mut()
+                .insert(header::CONTENT_LENGTH, size.into());
+            response
+        }
+        [range] => {
+            let mut response = Response::new(if head {
+                Body::empty()
+            } else {
+                Body::from(slice(range))
+            });
+            *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+            let headers = response.headers_mut();
+            headers.insert(header::CONTENT_TYPE, header_value(content_type));
+            headers.insert(header::CONTENT_LENGTH, range.len().into());
+            headers.insert(
+                header::CONTENT_RANGE,
+                header_value(&format!("bytes {}-{}/{size}", range.start, range.end)),
+            );
+            response
+        }
+        ranges => {
+            let boundary = boundary();
+            let mut body = Vec::new();
+            for range in ranges {
+                body.extend_from_slice(
+                    format!(
+                        "--{boundary}\r\nContent-Range: bytes {}-{}/{size}\r\nContent-Type: {content_type}\r\n\r\n",
+                        range.start, range.end
+                    )
+                    .as_bytes(),
+                );
+                body.extend_from_slice(&slice(range));
+                body.extend_from_slice(b"\r\n");
+            }
+            body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+            let length = body.len();
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/byteranges; boundary={boundary}"),
+                )
+                .header(header::CONTENT_LENGTH, length)
+                .body(if head {
+                    Body::empty()
+                } else {
+                    Body::from(body)
+                })
+                .expect("valid multipart response")
+        }
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    set_last_modified(headers, modified);
+    response
+}
+
+/// Go draws 30 random bytes; only the 60-character length is observable.
+fn boundary() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    format!("{nanos:060x}")
+}
+
 fn header_value(text: &str) -> HeaderValue {
     HeaderValue::from_str(text)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"))
@@ -473,11 +603,7 @@ fn multipart(
     content_type: &str,
     head: bool,
 ) -> Response<Body> {
-    // Go draws 30 random bytes; only the 60-character length is observable.
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
-    let boundary = format!("{nanos:060x}");
+    let boundary = boundary();
     let heads: Vec<String> = ranges
         .iter()
         .map(|range| {

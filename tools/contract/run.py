@@ -16,6 +16,7 @@ import ssl
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any
@@ -171,6 +172,11 @@ def request(
         },
         "latency_ms": round(elapsed, 3),
     }
+    if error and resolved.get("expect_connection_refused") and "Connection refused" in error:
+        # A closed port is the observation, e.g. the DLNA server after it
+        # was switched off. Status 0 stands for "nothing listens".
+        result["response"]["status"] = 0
+        error = None
     if error:
         result["error"] = error
     try:
@@ -628,6 +634,9 @@ def main() -> None:
         variables["torrent_file"] = str(args.torrent_file.resolve())
     if args.basic_auth:
         variables["basic_auth"] = args.basic_auth
+    # Discovery probes run in the fixture service and keep only what the
+    # target under test sent.
+    variables["target_host"] = urllib.parse.urlsplit(args.base_url).hostname or ""
     context = ssl._create_unverified_context() if args.insecure else None
     selected = set(args.only.split(",")) if args.only else None
     scenarios = [

@@ -17,9 +17,16 @@ use tokio::{
 };
 use tracing::{info, warn};
 
-use crate::config::{CacheMode, Config};
+use crate::{
+    config::{CacheMode, Config},
+    discovery::DiscoveryService,
+};
+
+/// The version clients see in `/echo`, Bonjour TXT records and MSX.
+const VERSION: &str = "MatriX.145";
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
+    let started = std::time::SystemTime::now();
     // Installed first so a signal that arrives during startup is not lost.
     let mut signals = Signals::install().context("cannot install signal handlers")?;
 
@@ -106,11 +113,22 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     search
         .set_rutor_enabled(torrents.settings().enable_rutor_search)
         .await;
+    let stored = torrents.settings();
+    let core: Arc<dyn ClientCore> = torrents;
+    let discovery = Arc::new(DiscoveryService::new(
+        Arc::clone(&core),
+        address.ip(),
+        address.port(),
+        VERSION.into(),
+        outbound.clone(),
+        started,
+    ));
+    discovery.start(&stored).await;
     let integrations = Integrations {
         search,
         msx: Arc::new(Msx::new(outbound, &config.data_dir)),
+        discovery: Arc::clone(&discovery) as Arc<dyn rustorr_http::Discovery>,
     };
-    let core: Arc<dyn ClientCore> = torrents;
     let outcome = serve_until_signalled(
         listener,
         &mut signals,
@@ -122,6 +140,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     .await;
 
     // Reverse order of startup, whatever ended the server.
+    discovery.stop().await;
+    info!("discovery stopped");
     engine.shutdown().await;
     info!("engine stopped");
     drop(cache);
@@ -223,7 +243,7 @@ async fn serve_until_signalled(
         // This endpoint is used by existing clients to recognise TorrServer.
         // The R2 reference capture fixes its compatibility value, independently
         // of Rustorr's package version.
-        version: "MatriX.145".into(),
+        version: VERSION.into(),
     };
     let requested = http.shutdown.clone().unwrap_or_default();
     let server =

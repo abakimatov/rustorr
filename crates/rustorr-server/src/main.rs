@@ -2,6 +2,7 @@
 //! graceful shutdown. The only crate that wires implementations together.
 
 mod config;
+mod discovery;
 mod logging;
 mod run;
 

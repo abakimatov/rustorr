@@ -20,6 +20,7 @@ rustorr-state = { path = "crates/rustorr-state" }
 rustorr-http = { path = "crates/rustorr-http" }
 rustorr-lifecycle = { path = "crates/rustorr-lifecycle" }
 rustorr-search = { path = "crates/rustorr-search" }
+rustorr-discovery = { path = "crates/rustorr-discovery" }
 
 anyhow = "1"
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
@@ -48,6 +49,10 @@ percent-encoding = "2"
 flate2 = "1"
 quick-xml = "0.41"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+socket2 = { version = "0.6", features = ["all"] }
+nix = { version = "0.30", default-features = false, features = ["net", "user", "hostname"] }
+md-5 = "0.10"
+rand = "0.9"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

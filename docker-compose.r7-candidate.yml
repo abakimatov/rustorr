@@ -15,3 +15,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./tools/contract/r7/msx-media:/srv/msx-media:ro
+    hostname: discovery-target
+    networks:
+      discovery:
+        ipv4_address: 172.31.252.20

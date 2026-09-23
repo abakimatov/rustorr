@@ -16,6 +16,7 @@ ALLOWED = {
     "rustorr-state": {"rustorr-domain"},
     "rustorr-lifecycle": {"rustorr-domain", "rustorr-engine", "rustorr-cache", "rustorr-state"},
     "rustorr-search": set(),
+    "rustorr-discovery": set(),
     "rustorr-http": {"rustorr-lifecycle", "rustorr-search"},
     "rustorr-server": {
         "rustorr-domain",
@@ -25,6 +26,7 @@ ALLOWED = {
         "rustorr-http",
         "rustorr-lifecycle",
         "rustorr-search",
+        "rustorr-discovery",
     },
 }
 

@@ -20,6 +20,7 @@ rustorr-state.workspace = true
 rustorr-http.workspace = true
 rustorr-lifecycle.workspace = true
 rustorr-search.workspace = true
+rustorr-discovery.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "signal", "sync", "time", "fs", "io-util"] }

@@ -14,12 +14,33 @@ services:
       # /files serves whatever directory POST /files links; both targets see
       # the same fixture tree at the same path.
       - ./tools/contract/r7/msx-media:/srv/msx-media:ro
+    # Bonjour and DLNA put the host name into their announcements.
+    hostname: discovery-target
+    networks:
+      discovery:
+        ipv4_address: 172.31.252.4
 
   indexer:
     image: rustorr-r1-fixture
     command: ["python3", "/r7/fake_indexer.py", "9117"]
+    environment:
+      DISCOVERY_ADDRESS: 172.31.252.30
     volumes:
       - ./tools/contract/r7:/r7:ro
     networks:
       baseline:
         ipv4_address: 172.31.250.30
+      discovery:
+        ipv4_address: 172.31.252.30
+
+networks:
+  # The internal fixture bridge drops multicast: Docker's isolation rules
+  # accept only destinations inside its subnet. An internal macvlan carries
+  # mDNS and SSDP between the targets and the probes and still has no route
+  # out.
+  discovery:
+    driver: macvlan
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.252.0/24
