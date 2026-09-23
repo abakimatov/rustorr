@@ -7,6 +7,8 @@ R6_COMPOSE="${COMPOSE} -f ${ROOT}/docker-compose.r6-contract.yml"
 PROXY_COMPOSE="${COMPOSE} -f ${ROOT}/docker-compose.r2-proxy.yml"
 R6_PROXY_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r6-proxy.yml"
 AUTH_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r6-auth.yml"
+R7_REFERENCE_COMPOSE="${COMPOSE} -f ${ROOT}/docker-compose.r7-capability.yml"
+R7_CANDIDATE_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r7-capability.yml"
 RUN_ROOT=${RUSTORR_CONTRACT_RUN_ROOT:-/tmp/rustorr-contract}
 MANIFEST=${ROOT}/tools/contract/scenarios.json
 ALLOWLIST=${ROOT}/tools/contract/deferred-routes.json
@@ -87,6 +89,7 @@ capture() {
   # resolves its upstream once, so it is restarted after the target is.
   case "${profile}" in
     auth) reference_compose=${AUTH_COMPOSE}; candidate_compose=${AUTH_COMPOSE} ;;
+    r7) reference_compose=${R7_REFERENCE_COMPOSE}; candidate_compose=${R7_CANDIDATE_COMPOSE} ;;
     *) reference_compose=${COMPOSE}; candidate_compose=${R6_COMPOSE} ;;
   esac
   case "${target}:${profile}" in
@@ -114,6 +117,10 @@ capture() {
     # Both servers bind before their torrent runtime is fully settled. Give
     # that runtime a bounded quiet interval before the isolated corpus starts.
     sleep 2
+  fi
+  if [ "${profile}" = r7 ]; then
+    # The fake Torznab indexer answers both targets from the fixture network.
+    ${reference_compose} up -d indexer
   fi
   if [ "${profile}" = proxy ]; then
     if [ "${target}" = reference ]; then

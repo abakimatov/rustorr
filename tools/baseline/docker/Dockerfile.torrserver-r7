@@ -1,0 +1,35 @@
+# MatriX.145 with every R7 capability available: ffprobe, GStreamer and a
+# fresh local Rutor database, so the corpus observes enabled modules while the
+# reference still never reaches the internet.
+FROM golang:1.25-bookworm AS build
+
+ARG TORRSERVER_COMMIT=2c7fa43b9ac64a9eda27314c0b6791518497f188
+WORKDIR /src
+
+RUN git clone https://github.com/YouROK/TorrServer.git . \
+    && git checkout --detach "${TORRSERVER_COMMIT}"
+
+WORKDIR /src/server
+RUN go build -trimpath -ldflags='-s -w' -o /torrserver ./cmd
+
+FROM python:3.12-slim-bookworm AS fixtures
+COPY tools/contract/r7/fixtures.py /r7/fixtures.py
+RUN python3 /r7/fixtures.py /r7/out
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates iproute2 fuse3 \
+       ffmpeg libgstreamer1.0-0 gstreamer1.0-tools gstreamer1.0-plugins-base \
+       gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+       gstreamer1.0-libav \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /torrserver /usr/local/bin/TorrServer
+COPY --from=fixtures /r7/out/rutor.ls /r7/rutor.ls
+COPY tools/contract/r7/reference-entrypoint.sh /usr/local/bin/reference-entrypoint
+RUN chmod 0755 /usr/local/bin/TorrServer /usr/local/bin/reference-entrypoint
+
+EXPOSE 8090
+ENTRYPOINT ["/usr/local/bin/reference-entrypoint"]
+CMD ["-d", "/config", "-p", "8090", "--webdav"]

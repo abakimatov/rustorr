@@ -1,0 +1,21 @@
+services:
+  torrserver:
+    build:
+      context: .
+      dockerfile: tools/baseline/docker/Dockerfile.torrserver-r7
+    image: rustorr-r7-torrserver
+    environment:
+      # The fake indexer must bypass the dead proxy that keeps the reference
+      # away from public IP discovery.
+      NO_PROXY: tracker,seeder,indexer,127.0.0.1,localhost
+    extra_hosts:
+      - "indexer:172.31.250.30"
+
+  indexer:
+    image: rustorr-r1-fixture
+    command: ["python3", "/r7/fake_indexer.py", "9117"]
+    volumes:
+      - ./tools/contract/r7:/r7:ro
+    networks:
+      baseline:
+        ipv4_address: 172.31.250.30

@@ -108,7 +108,9 @@ def request(
         body, content_type = multipart_body(resolved["multipart"])
         headers.setdefault("Content-Type", content_type)
     headers.setdefault("Accept", "application/json, text/plain, */*")
-    url = base_url.rstrip("/") + str(resolved["path"])
+    # A step may address a fixture service (for example the fake indexer's
+    # request log) instead of the target under test.
+    url = str(resolved["url"]) if "url" in resolved else base_url.rstrip("/") + str(resolved["path"])
     started = time.monotonic()
     req = urllib.request.Request(url, data=body, headers=headers, method=str(resolved["method"]))
     status: int | None = None
@@ -535,6 +537,14 @@ def run_steps(
     failures: list[str] = []
     for number, raw_step in enumerate(steps):
         step = substitute(raw_step, variables)
+        if "sleep_ms" in step:
+            # Only for reference work that has no observable readiness signal.
+            time.sleep(int(step["sleep_ms"]) / 1000)
+            results.append({
+                "id": step.get("id", f"sleep-{number}"),
+                "response": {"status": 200, "body_sha256": hashlib.sha256(b"").hexdigest()},
+            })
+            continue
         if "wait_for_torrent" in step or "wait_for_metadata" in step:
             metadata_only = "wait_for_metadata" in step
             result, failure = wait_for_torrent(
@@ -579,7 +589,7 @@ def main() -> None:
     parser.add_argument("--torrent-hash")
     parser.add_argument("--torrent-file", type=pathlib.Path)
     parser.add_argument("--basic-auth", help="user:password for setup and scenarios marked auth")
-    parser.add_argument("--profile", choices=("direct", "auth", "proxy"), default="direct")
+    parser.add_argument("--profile", choices=("direct", "auth", "proxy", "r7"), default="direct")
     parser.add_argument("--only", help="comma-separated scenario IDs to capture")
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--readiness-timeout", type=float, default=90)
