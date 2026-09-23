@@ -1,0 +1,115 @@
+# R7 — модули функционального паритета
+
+Статус: `in progress`. Обновлено: `2026-09-23`.
+
+Цель этапа — перенести возможности TorrServer MatriX.145
+(`2c7fa43b9ac64a9eda27314c0b6791518497f188`) за пределами клиентского ядра R6
+и для каждой зафиксировать статус на Linux `x86_64`/`aarch64`. Источник истины,
+как и в R6, — наблюдаемое поведение эталона; исходный код объясняет
+наблюдение, но не заменяет его.
+
+## Решения пользователя (2026-09-23)
+
+- **Telegram-бот (`--tgtoken`, `server/tgbot`, ~6 тыс. строк) откладывается за
+  первую версию.** Это явное исключение из паритета первой версии: бот —
+  клиент поверх того же API, существующим плеерам он не нужен. Возврат —
+  отдельным этапом после R10.
+- **Старый встроенный веб-интерфейс не переносится.** Статические ресурсы
+  React-сборки эталона (`/`, `/index.html`, `/static/*`, иконки, манифесты)
+  не воспроизводятся; до R8 корень отдаёт заглушку, в R8 — новый UI.
+  `/swagger` заменяется OpenAPI-описанием API Rustorr.
+- **GStreamer реализуется через gstreamer-rs отдельным capability-профилем.**
+  Основной бинарник работает без GStreamer; возможность включается, только
+  если во время работы доступны системные библиотеки. Отдельный вариант
+  Docker-образа содержит GStreamer. Модуль идёт последним в R7.
+
+## Инвентарь эталона
+
+| Модуль | Поверхность эталона | Как включается | Внешние зависимости | Linux-заметки |
+| --- | --- | --- | --- | --- |
+| API веб-интерфейса | `GET /stat`, `GET /magnets`, `GET /download/:size`, `GET /shutdown[/*reason]` | всегда; auth | нет | — |
+| Хранилище настроек | `GET/POST /storage/settings` (JSON или BBolt для settings/viewed) | всегда; auth; `--rdb` запрещает запись | нет | в Rustorr источник истины — SQLite (ADR 0006) |
+| Режимы процесса | `--rdb`, `--maxsize`, `--torrentsdir` (автозагрузка через наблюдение каталога), `--searchwa` | флаги CLI | нет | inotify |
+| Поиск Rutor | `GET /search/*query` | `EnableRutorSearch`; без auth при `--searchwa` | загрузка базы `http://releases.yourok.ru/torr/rutor.ls` | для стенда нужна герметичная копия базы |
+| Torznab | `GET /torznab/search/*query`, `POST /torznab/test` | `EnableTorznabSearch`, `TorznabUrls` | внешние индексаторы | для стенда нужен фиктивный индексатор |
+| TMDB | `GET /tmdb/settings` | всегда; auth | нет (только настройки) | — |
+| DLNA | UPnP MediaServer (`anacrolix/dms`): SSDP и ContentDirectory | `EnableDLNA`, `FriendlyName` | multicast | в Docker нужен host network |
+| Bonjour | mDNS-сервис (`grandcat/zeroconf`) | `EnableBonjour` | multicast | в Docker нужен host network |
+| MSX | `/msx/*`, `/files`, `/msx/proxy`, `/msx/imdb/:id` | всегда; auth | внешние URL через `/msx/proxy` | — |
+| WebDAV | `/dav`, `/dav/*` | `--webdav` | нет | — |
+| FUSE | монтирование торрентов как файловой системы | `--fusepath` | `/dev/fuse` | в Docker нужны `/dev/fuse` и `SYS_ADMIN` |
+| MCP | `/mcp`, `/mcp/*` (streamable HTTP; инструменты `get_server_info`, `list_torrents`, `get_torrent`, `add_torrent`, `update_torrent`, `remove_torrent`, `drop_torrent`, `get_play_url` и др.) | всегда; auth | нет | — |
+| ffprobe | `GET /ffp/status`, `GET /ffp/:hash/:id` | наличие бинарника `ffprobe` в `PATH` | ffprobe | отдельный вариант образа или пакет |
+| GStreamer | `GET/POST /gst/settings`, `/gst/remove`, `/gst/echo`, `/gst/:hash/{heartbeat,probe,master.m3u8,video.m3u8,init.mp4,seg/*,subs/*}` | наличие libgstreamer | GStreamer 1.x и плагины | capability-профиль |
+| Прочие флаги | `--ip` (повторяемый), `--logpath`, `--weblogpath`, `--dontkill`, `--pubipv4/6`, `--torrentaddr`, `--proxyurl`/`--proxymode` | флаги CLI | прокси для BT-трафика | часть относится к движку |
+
+Вне R7: Telegram-бот (отложен за первую версию); старый UI (не переносится);
+встроенный TLS, HTTPS-редирект, service/install и устаревшие алиасы CLI/env
+(R9); вытеснение на уровне кусков (как в R6).
+
+## Инфраструктура наблюдения
+
+В нынешней сборке эталона часть модулей выключена или не имеет зависимостей.
+Кроме того, часть отложенных проб R6 обращается к путям, которых у эталона
+нет (`/storage` вместо `/storage/settings`, `/tmdb` вместо `/tmdb/settings`,
+`/ffprobe` вместо `/ffp/...`, `/webdav/` вместо `/dav`, HTTP `/dlna` для
+протокола UPnP). Их `404` не описывает модули и не должен цитироваться как
+наблюдение; R7.0 заменяет эти пробы путями из инвентаря. До реализации модуля
+его поведение нужно наблюдать при включённой возможности:
+
+1. **Capability-профиль эталона.** Вариант образа MatriX.145 с `ffprobe` и
+   GStreamer, запуск с `--webdav`, настройками `EnableDLNA`, `EnableBonjour`,
+   `EnableRutorSearch`, `EnableTorznabSearch`. Для DLNA/Bonjour — отдельный
+   запуск с host network.
+2. **Герметичные внешние сервисы.** Фиктивный Torznab-индексатор, локальная
+   копия базы Rutor, фикстурные URL для `/msx/proxy`. Ни эталон, ни кандидат не
+   ходят в интернет.
+3. **Пробы не-HTTP протоколов.** SSDP/ContentDirectory для DLNA, mDNS-запрос для
+   Bonjour, монтирование и чтение для FUSE. Их результаты сравниваются так же,
+   как HTTP-корпус: сырые наблюдения и явная нормализация.
+4. **Профили корпуса.** Каждая возможность получает свой профиль
+   `tools/r2.sh capture --profile <capability>`. Отложенные маршруты уходят из
+   `deferred-routes.json` по мере реализации модуля.
+
+## Порядок работ
+
+Каждый шаг закрывается, только когда у модуля есть заметка о реализации,
+контрактный или smoke-тест, статус для Linux `x86_64`/`aarch64`, заметка о
+внешних зависимостях и известные ограничения.
+
+1. **R7.0 — инфраструктура.** Capability-профиль эталона, герметичные внешние
+   сервисы и первый корпус наблюдений по всем маршрутам R7.
+2. **R7.1 — API веб-интерфейса.** `/stat`, `/magnets`, `/download/:size`,
+   `/shutdown`; заглушка корня; OpenAPI вместо `/swagger`.
+3. **R7.2 — настройки, просмотренное, хранилище.** `/storage/settings`,
+   `/tmdb/settings`, `--rdb`, `--maxsize`, `--torrentsdir`, `--searchwa`.
+4. **R7.3 — поиск.** Rutor, Torznab и `/torznab/test`.
+5. **R7.4 — DLNA, Bonjour, MSX.**
+6. **R7.5 — WebDAV и FUSE.**
+7. **R7.6 — MCP.**
+8. **R7.7 — ffprobe.**
+9. **R7.8 — GStreamer** (capability-профиль gstreamer-rs, отдельный вариант
+   образа).
+10. **R7.9 — оставшиеся флаги.** Привязка к нескольким адресам, логи, прокси
+    BT-трафика, публичные адреса.
+
+## Архитектурные ограничения
+
+- Модули зависят от `ClientCore` и порта движка, а не от librqbit напрямую;
+  границы крейтов проверяет `tools/r4.sh boundaries` (ADR 0005).
+- Необязательные возможности с тяжёлыми зависимостями (GStreamer, FUSE)
+  выносятся в cargo-features или отдельные крейты, чтобы основной бинарник и
+  образ оставались без них.
+- Внешние сетевые обращения (Rutor, Torznab, MSX proxy) идут через один
+  HTTP-клиент с таймаутами; стенд подменяет адреса на герметичные.
+
+## Критерий выхода
+
+R7 получает `done`, когда каждый модуль из инвентаря реализован или явно
+исключён решением пользователя, у каждого есть запись в матрице возможностей
+(реализация, тест, статус для двух Linux-архитектур, зависимости,
+ограничения), capability-корпуса эталона и кандидата не имеют core-различий,
+а регрессия R6 остаётся зелёной.
+
+Текущее состояние и команды продолжения будут вестись в
+[`r7-continuation.md`](r7-continuation.md).
