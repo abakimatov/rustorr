@@ -44,6 +44,7 @@ use crate::{
     msx_api::{self, Msx},
     range::{self, ByteRange, RangeError},
     search_api, settings_api, web_api,
+    webdav::{self, WebDav},
 };
 
 #[derive(Debug, Clone)]
@@ -76,6 +77,8 @@ pub(crate) struct AppState {
     pub(crate) core: Arc<dyn ClientCore>,
     pub(crate) integrations: Integrations,
     pub(crate) http: HttpConfig,
+    /// Present when `/dav` is enabled.
+    pub(crate) webdav: Option<Arc<WebDav>>,
 }
 
 pub fn router(info: ServerInfo) -> Router {
@@ -102,11 +105,15 @@ pub fn router_with_services(
     integrations: Integrations,
     http: HttpConfig,
 ) -> Router {
+    let webdav = http
+        .webdav
+        .then(|| Arc::new(WebDav::new(Arc::clone(&core))));
     let state = AppState {
         info,
         core,
         integrations,
         http,
+        webdav,
     };
     let routes = Router::new()
         .route("/echo", get(echo_state))
@@ -157,6 +164,9 @@ pub fn router_with_services(
         )
         .route("/files/", get(msx_api::files).head(msx_api::files))
         .route("/files/{*path}", get(msx_api::files).head(msx_api::files))
+        .route("/dav", any(webdav::handle))
+        .route("/dav/", any(webdav::handle))
+        .route("/dav/{*path}", any(webdav::handle))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(state.clone())

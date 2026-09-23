@@ -17,7 +17,9 @@ ALLOWED = {
     "rustorr-lifecycle": {"rustorr-domain", "rustorr-engine", "rustorr-cache", "rustorr-state"},
     "rustorr-search": set(),
     "rustorr-discovery": set(),
-    "rustorr-http": {"rustorr-lifecycle", "rustorr-search"},
+    "rustorr-vfs": {"rustorr-lifecycle"},
+    "rustorr-fuse": {"rustorr-lifecycle", "rustorr-vfs"},
+    "rustorr-http": {"rustorr-lifecycle", "rustorr-search", "rustorr-vfs"},
     "rustorr-server": {
         "rustorr-domain",
         "rustorr-engine",
@@ -27,6 +29,8 @@ ALLOWED = {
         "rustorr-lifecycle",
         "rustorr-search",
         "rustorr-discovery",
+        "rustorr-vfs",
+        "rustorr-fuse",
     },
 }
 

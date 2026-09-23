@@ -12,11 +12,14 @@ mod error;
 mod file_server;
 mod go_decode;
 mod m3u;
+mod media_type;
 mod msx_api;
 mod range;
 mod search_api;
+mod serve_content;
 mod settings_api;
 mod web_api;
+mod webdav;
 
 pub use access::{Credentials, HttpConfig};
 pub use app::{

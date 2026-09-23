@@ -1,4 +1,6 @@
-//! `server/mimetype` from MatriX.145: the types its DLNA listing shows.
+//! Media types by file name as MatriX.145's process resolves them: Go's
+//! `mime.TypeByExtension` after `server/mimetype` registered TorrServer's own
+//! table, which therefore also applies to its file server and WebDAV.
 
 /// TorrServer's own extension table, which takes precedence over Go's.
 const TABLE: &[(&str, &str)] = &[
@@ -34,15 +36,10 @@ const TABLE: &[(&str, &str)] = &[
     ("application/vnd.rn-realmedia-vbr", ".rmvb"),
 ];
 
-/// `MimeTypeByPath` for a torrent file path: by extension (a trailing
-/// `.part` ignored), `None` when unknown — the reference then fails to sniff
-/// the file, which only exists inside the torrent, and skips it.
-pub(crate) fn by_path(path: &str) -> Option<String> {
-    let base = path.rsplit('/').next().unwrap_or(path);
-    let base = base.strip_suffix(".part").unwrap_or(base);
-    let extension = base.rfind('.').map(|dot| &base[dot..])?;
+/// The essence type for an extension (with its dot), without parameters.
+fn essence(extension: &str) -> Option<String> {
     let lower = extension.to_ascii_lowercase();
-    let found = TABLE
+    TABLE
         .iter()
         .find(|(_, extensions)| {
             extensions
@@ -51,10 +48,39 @@ pub(crate) fn by_path(path: &str) -> Option<String> {
         })
         .map(|(kind, _)| (*kind).to_owned())
         .or_else(|| {
-            mime_guess::from_ext(&lower[1..])
+            mime_guess::from_ext(lower.strip_prefix('.')?)
                 .first()
                 .map(|mime| mime.essence_str().to_owned())
-        })?;
+        })
+}
+
+/// Go's `path.Ext`: from the last dot of the last element.
+fn extension(name: &str) -> &str {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    base.rfind('.').map_or("", |dot| &base[dot..])
+}
+
+/// `mime.TypeByExtension`: text types carry `charset=utf-8`.
+pub(crate) fn by_extension(name: &str) -> Option<String> {
+    let extension = extension(name);
+    if extension.is_empty() {
+        return None;
+    }
+    let kind = essence(extension)?;
+    Some(if kind.starts_with("text/") {
+        format!("{kind}; charset=utf-8")
+    } else {
+        kind
+    })
+}
+
+/// `MimeTypeByPath` for a torrent file path: by extension (a trailing
+/// `.part` ignored), `None` when unknown — the reference then fails to sniff
+/// the file, which only exists inside the torrent, and skips it.
+pub(crate) fn by_path(path: &str) -> Option<String> {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    let base = base.strip_suffix(".part").unwrap_or(base);
+    let found = by_extension(base)?;
     Some(match found.as_str() {
         "video/mp2t" => "video/mpeg".into(),
         "video/x-msvideo" => "video/avi".into(),
@@ -87,6 +113,14 @@ mod tests {
         assert_eq!(by_path("a.opus").as_deref(), Some("audio/opus"));
         assert_eq!(by_path("a.mp4.part").as_deref(), Some("video/mp4"));
         assert_eq!(by_path("README").as_deref(), None);
+        assert_eq!(
+            by_extension("a/b.srt").as_deref(),
+            Some("text/srt; charset=utf-8")
+        );
+        assert_eq!(
+            by_extension("x.txt").as_deref(),
+            Some("text/plain; charset=utf-8")
+        );
         assert!(is_media("application/vnd.rn-realmedia-vbr"));
         assert!(!is_media("text/srt"));
         assert_eq!(major("video/mp4"), "video");

@@ -9,10 +9,11 @@ use std::{
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use rustorr_lifecycle::{AddTorrent, InfoHash, TorrentCommand, TorrentReply, TorrentView};
 
+use crate::media_type as mime;
+
 use super::{
     DlnaDevice, clean,
     didl::{Entry, Object, Resource, didl_lite},
-    mime,
     soap::UpnpError,
 };
 

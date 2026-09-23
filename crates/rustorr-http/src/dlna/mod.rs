@@ -5,7 +5,8 @@
 
 mod content;
 mod didl;
-mod mime;
+
+pub(crate) use didl::escape as escape_text;
 mod soap;
 
 use std::{
@@ -101,19 +102,23 @@ async fn dispatch(State(device): State<Arc<DlnaDevice>>, request: Request<Body>)
                 request.method(),
                 request.headers(),
             )
+            .await
         }
         "/res" => resource(&request),
         // dms serves `<path>.srt` relative to its working directory here;
         // Rustorr does not expose local files, so it is always missing.
         "/subtitle" => go_http_error(StatusCode::NOT_FOUND, "404 page not found"),
         path => match SCPDS.iter().find(|(scpd, _)| *scpd == path) {
-            Some((_, document)) => serve_memory(
-                Bytes::from_static(document.as_bytes()),
-                XML,
-                seconds(device.started),
-                request.method(),
-                request.headers(),
-            ),
+            Some((_, document)) => {
+                serve_memory(
+                    Bytes::from_static(document.as_bytes()),
+                    XML,
+                    seconds(device.started),
+                    request.method(),
+                    request.headers(),
+                )
+                .await
+            }
             None => ([(header::CONTENT_TYPE, "text/html")], ROOT_PAGE).into_response(),
         },
     };

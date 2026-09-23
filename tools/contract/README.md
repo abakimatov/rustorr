@@ -155,3 +155,23 @@ MSX (`{ico:north} N / N {ico:south} N` в `POST /msx/trn`): это те же
 Во время снимка `r7` вторая цель остановлена, иначе обе объявляли бы одно
 имя. Сценарий с `"expect_connection_refused": true` записывает закрытый порт
 как статус `0` (DLNA после выключения).
+
+## WebDAV и FUSE (R7.5)
+
+MatriX.145 перечисляет свойства PROPFIND и содержимое каталогов в порядке Go
+map, поэтому тела multistatus меняются от запроса к запросу. `diff.py`
+сравнивает XML с пространством имён `DAV:` в канонической форме: ответы
+multistatus и свойства внутри `prop` отсортированы, `getlastmodified` после
+2000 года — `<http-date>`, `getetag` и заголовок `ETag` вида
+`hex(время в нс) + hex(размер)` — `"<mtime>"` плюс размер (правило
+`webdav-etag` трогает только значения, чьи первые 16 цифр — время в
+2000–2040 годах), токен блокировки — `<lock-token>`.
+
+FUSE не HTTP: `tools/r2.sh fuse-probe {reference|candidate}` поднимает цель с
+`docker-compose.r7-fuse.yml` или `docker-compose.r7-fuse-candidate.yml`
+(`/dev/fuse`, `SYS_ADMIN`; кандидат от root на отдельном томе), добавляет
+медиафикстуру и выполняет в контейнере `tools/contract/r7/fuse_probe.sh`:
+`/proc/self/mounts`, `ls -la` и `stat` по уровням, чтение с разных смещений,
+попытки записи с кодами выхода, `df`. `fuse_normalize.py` заменяет времена
+добавления торрента и номера inode; файлы
+`<run>/{reference,candidate}-fuse.txt` сравниваются `diff -u`.

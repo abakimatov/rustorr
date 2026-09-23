@@ -1,6 +1,6 @@
 # Продолжение R7
 
-Статус: `in progress`; R7.0–R7.4 выполнены 2026-09-23.
+Статус: `in progress`; R7.0–R7.5 выполнены 2026-09-23.
 
 План и решения пользователя — в [`r7-plan.md`](r7-plan.md).
 
@@ -300,6 +300,67 @@ Rustorr отвечает сразу — без паузы проба ловил�
 `r7-root` и `r7-stat` точно совпадают с allowlist; остаются 11
 core-различий модулей R7.5–R7.8. Регрессия `direct` (`/tmp/rustorr-contract/r7-r74c-direct/`) —
 46 случаев, 0 core-различий. `tools/r4.sh check` — 272 теста.
+
+## R7.5 — WebDAV и FUSE
+
+- Новый крейт `rustorr-vfs` — `server/torrfs` поверх `ClientCore`:
+  категории (`SanitizeName`, пустая — `other`) → торренты (название или хеш;
+  при `ShowFSActiveTorr` только с метаданными) → файлы по display path
+  anacrolix. Чтение каталога торрента без метаданных загружает его, ожидая до
+  `TorrentDisconnectTimeout × 2` попыток по 0,5 с. Режимы `0555`/`0444`,
+  размер каталогов 4096, фиксированные времена корня и категорий, путь ниже
+  файла открывает файл, `..` и пустые элементы — `ErrInvalid`. Дети
+  сортируются по имени (у эталона — порядок Go map).
+- `rustorr_http::serve_content` — Go `http.ServeContent` для памяти, файла и
+  торрента: предусловия с ETag (`If-Match`, `If-None-Match`, `If-Range`) и
+  датами, диапазоны, multipart, тип по расширению или сниффинг. Раздача
+  `/files/*` и DLNA переведены на него; таблица типов TorrServer
+  (`media_type`) общая, потому что `server/mimetype` регистрирует её в Go
+  глобально.
+- WebDAV (`--webdav` / `RUSTORR_WEBDAV`, `/dav`, без HTTP-авторизации, как у
+  эталона) — порт `x/net/webdav` поверх read-only ФС: `OPTIONS` (`Allow` по
+  типу ресурса), `GET/HEAD/POST` через `ServeContent` с ETag
+  `"%x%x"` (mtime в нс, размер), `PROPFIND` (allprop/propname/prop/include,
+  глубины 0/1/infinity, живые свойства, `getcontenttype` по расширению или по
+  первым байтам торрента), `PROPPATCH` (403 для живых свойств, 500 для
+  мёртвых), `LOCK`/`UNLOCK` (`memLS`: токены от времени старта, таймауты,
+  `If`), запись и копирование — статусы read-only ФС эталона. Ответы
+  multistatus длиннее 2 КиБ идут chunked; методы вне маршрутов gin — `404`.
+- FUSE (`--fuse-path` / `RUSTORR_FUSE_PATH`; крейт `rustorr-fuse` на `fuser`
+  за cargo-feature `fuse`, включённой по умолчанию): монтирование `mount(2)`
+  с типом `fuse.torrserver`, источником `torrserver-fuse`, `nosuid,nodev`,
+  `allow_other,max_read=131072` (без права монтировать — `fusermount3`);
+  атрибуты `go-fuse` (nlink 0, inode 0 у корня и `2^63+n` у остальных, блоки
+  по 512 байт), `DIRECT_IO`, чтение через playback с переиспользованием
+  потока при последовательном чтении; ответы `go-fuse` для
+  нереализованного: создание и `setattr` — `EROFS`, `mkdir`/`rename` —
+  `ENOTSUP`, `unlink`/`rmdir` — успех без удаления. Ошибка монтирования
+  завершает процесс, при остановке ФС размонтируется.
+
+Ограничения:
+- FUSE в cargo-feature по умолчанию, а не в отдельном образе, как планировал
+  R7: `fuser` — чистый Rust без libfuse, образу пакеты не нужны. Монтирование
+  требует `/dev/fuse` и root с `CAP_SYS_ADMIN` (в образе нет `fusermount3`).
+- Порядок категорий, торрентов и файлов стабилен (по имени); у эталона он
+  меняется от запроса к запросу. При двух торрентах с одинаковым именем в
+  категории путь ведёт к первому по нашему порядку.
+- `DetectContentType` — упрощённый набор сигнатур.
+- WebDAV без авторизации повторяет эталон; доступ ограничивают WAF и сеть.
+
+Стенд: каноническая форма WebDAV-XML в `diff.py` (сортировка responses и
+свойств, даты и ETag торрентов, lock-токены),
+правила заголовков `webdav-etag` и `lock-token: ignore`; FUSE снимается
+отдельной командой `tools/r2.sh fuse-probe {reference|candidate}`
+(`docker-compose.r7-fuse*.yml`, `tools/contract/r7/fuse_probe.sh`).
+
+Доказательства: `/tmp/rustorr-contract/r7-r75/` — оба снимка `r7`
+действительны (188 случаев); все 39 сценариев WebDAV совпадают, отложенные
+различия точно совпадают с allowlist; остаются 8 core-различий модулей
+R7.6–R7.8 (MCP, ffprobe, GStreamer). FUSE —
+`/tmp/rustorr-contract/r7-r75-fuse/{reference,candidate}-fuse.txt`
+идентичны после нормализации. Регрессия `direct`
+(`/tmp/rustorr-contract/r7-r75-direct/`) — 46 случаев, 0 core-различий.
+`tools/r4.sh check` — 285 тестов.
 
 ## Команды
 

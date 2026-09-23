@@ -16,6 +16,9 @@ services:
     volumes:
       - ./tools/contract/r7/msx-media:/srv/msx-media:ro
     hostname: discovery-target
+    environment:
+      # The reference runs with --webdav.
+      RUSTORR_WEBDAV: "true"
     networks:
       discovery:
         ipv4_address: 172.31.252.20

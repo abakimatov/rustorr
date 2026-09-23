@@ -76,6 +76,17 @@ pub struct Config {
     #[arg(long, env = "RUSTORR_SEARCH_WITHOUT_AUTH")]
     pub search_without_auth: bool,
 
+    /// Serve the torrent file system over WebDAV at `/dav`, without HTTP
+    /// authentication, as MatriX.145's `--webdav` does.
+    #[arg(long, env = "RUSTORR_WEBDAV")]
+    pub webdav: bool,
+
+    /// Mount the torrent file system here with FUSE, read-only, as
+    /// MatriX.145's `--fusepath` does. Needs `/dev/fuse` and the right to
+    /// mount (root with `CAP_SYS_ADMIN`, or `fusermount3`).
+    #[arg(long, env = "RUSTORR_FUSE_PATH")]
+    pub fuse_path: Option<PathBuf>,
+
     /// Seconds to wait for open connections on shutdown before closing them.
     /// Keep it below the container runtime's stop timeout (10 s in Docker).
     #[arg(
@@ -162,9 +173,10 @@ mod tests {
         assert!(!config.disable_dht && !config.disable_trackers);
         assert!(!config.http_auth);
         assert_eq!(config.trusted_proxies.len(), 2);
-        assert!(!config.read_only && !config.search_without_auth);
+        assert!(!config.read_only && !config.search_without_auth && !config.webdav);
         assert_eq!(config.max_stream_size, None);
         assert_eq!(config.torrents_dir, None);
+        assert_eq!(config.fuse_path, None);
         assert_eq!(config.shutdown_grace, Duration::from_secs(5));
         assert_eq!(config.log_format, LogFormat::Text);
     }

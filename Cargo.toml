@@ -21,6 +21,8 @@ rustorr-http = { path = "crates/rustorr-http" }
 rustorr-lifecycle = { path = "crates/rustorr-lifecycle" }
 rustorr-search = { path = "crates/rustorr-search" }
 rustorr-discovery = { path = "crates/rustorr-discovery" }
+rustorr-vfs = { path = "crates/rustorr-vfs" }
+rustorr-fuse = { path = "crates/rustorr-fuse" }
 
 anyhow = "1"
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }

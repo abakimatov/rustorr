@@ -41,6 +41,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         read_only: config.read_only,
         max_stream_size: config.max_stream_size,
         search_without_auth: config.search_without_auth,
+        webdav: config.webdav,
     };
 
     let listener = TcpListener::bind(config.listen)
@@ -124,6 +125,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         started,
     ));
     discovery.start(&stored).await;
+    let fuse = mount_fuse(config.fuse_path.as_deref(), &core)?;
     let integrations = Integrations {
         search,
         msx: Arc::new(Msx::new(outbound, &config.data_dir)),
@@ -140,6 +142,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     .await;
 
     // Reverse order of startup, whatever ended the server.
+    unmount_fuse(fuse);
     discovery.stop().await;
     info!("discovery stopped");
     engine.shutdown().await;
@@ -218,6 +221,42 @@ fn cache_store(config: &Config) -> Arc<dyn PieceStore> {
         CacheMode::Memory => Arc::new(MemoryStore::new()),
     }
 }
+
+#[cfg(feature = "fuse")]
+type Fuse = Option<rustorr_fuse::FuseMount>;
+#[cfg(not(feature = "fuse"))]
+type Fuse = ();
+
+/// `FuseAutoMount`: a failed mount stops the server, as in the reference.
+#[cfg(feature = "fuse")]
+fn mount_fuse(path: Option<&std::path::Path>, core: &Arc<dyn ClientCore>) -> anyhow::Result<Fuse> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    rustorr_fuse::FuseMount::mount(Arc::clone(core), path, tokio::runtime::Handle::current())
+        .map(Some)
+        .with_context(|| format!("cannot mount the FUSE file system at {}", path.display()))
+}
+
+#[cfg(not(feature = "fuse"))]
+fn mount_fuse(path: Option<&std::path::Path>, _core: &Arc<dyn ClientCore>) -> anyhow::Result<Fuse> {
+    if path.is_some() {
+        bail!("this build has no FUSE support; rebuild with the `fuse` feature");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "fuse")]
+fn unmount_fuse(fuse: Fuse) {
+    if let Some(mount) = fuse
+        && let Err(error) = mount.unmount()
+    {
+        warn!(%error, "cannot unmount the FUSE file system");
+    }
+}
+
+#[cfg(not(feature = "fuse"))]
+fn unmount_fuse(_fuse: Fuse) {}
 
 /// The one client for every outbound request (Rutor, Torznab, MSX). Only
 /// connecting and each read are bounded, so the MSX proxy can stream long

@@ -1,0 +1,19 @@
+# Rustorr's FUSE mount, as docker-compose.r7-fuse.yml for the reference.
+# fuser mounts directly as root with CAP_SYS_ADMIN (the image has no
+# fusermount3); root gets a data volume of its own so the shared one keeps
+# its unprivileged owner.
+services:
+  rustorr:
+    user: "0:0"
+    environment:
+      RUSTORR_FUSE_PATH: /mnt/torrserver
+    devices:
+      - /dev/fuse
+    cap_add: [SYS_ADMIN]
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - rustorr-fuse-state:/data
+
+volumes:
+  rustorr-fuse-state:

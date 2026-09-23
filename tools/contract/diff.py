@@ -10,8 +10,56 @@ import hashlib
 import json
 import pathlib
 import re
+import xml.etree.ElementTree as ElementTree
 from email.utils import parsedate_to_datetime
 from typing import Any
+
+
+WEBDAV_ETAG = re.compile(r'^"([0-9a-f]{16})([0-9a-f]+)"$')
+
+
+def webdav_etag(value: str) -> str:
+    """x/net/webdav's ETag is hex(mtime in ns) + hex(size). The mtime is the
+    torrent's addition time, which differs between captures; the size stays.
+    Only values whose first 16 digits are a time in 2000-2040 match, so the
+    hex-encoded stream ETags are never touched."""
+    match = WEBDAV_ETAG.match(value)
+    if match and 946684800 * 10**9 <= int(match.group(1), 16) <= 2208988800 * 10**9:
+        return f'"<mtime>{match.group(2)}"'
+    return value
+
+
+def canonical_dav_xml(body: bytes) -> bytes | None:
+    """A WebDAV XML body in a canonical form: the reference writes
+    properties and directory entries in Go map order, which changes between
+    requests. Responses and properties are sorted; dates and ETags derived
+    from torrent addition times and lock tokens are normalized."""
+    if b"DAV:" not in body:
+        return None
+    try:
+        root = ElementTree.fromstring(body)
+    except ElementTree.ParseError:
+        return None
+
+    def canon(element: ElementTree.Element, parent: str) -> list[Any]:
+        text = element.text or ""
+        if element.tag == "{DAV:}getlastmodified":
+            try:
+                if parsedate_to_datetime(text).year >= 2000:
+                    text = "<http-date>"
+            except (TypeError, ValueError):
+                pass
+        elif element.tag == "{DAV:}getetag":
+            text = webdav_etag(text)
+        elif element.tag == "{DAV:}href" and parent == "{DAV:}locktoken":
+            text = "<lock-token>"
+        children = [canon(child, element.tag) for child in element]
+        if element.tag in ("{DAV:}multistatus", "{DAV:}prop"):
+            children.sort(key=lambda child: json.dumps(child, ensure_ascii=False))
+        return [element.tag, sorted(element.attrib.items()), text, children, element.tail or ""]
+
+    declaration = body.split(b"?>", 1)[0] if body.startswith(b"<?xml") else b""
+    return declaration + json.dumps(canon(root, ""), ensure_ascii=False).encode()
 
 
 def normalize_headers(headers: dict[str, str], rules: dict[str, str]) -> dict[str, str]:
@@ -22,6 +70,8 @@ def normalize_headers(headers: dict[str, str], rules: dict[str, str]) -> dict[st
             continue
         if rule == "ignore":
             normalized.pop(key)
+        elif rule == "webdav-etag":
+            normalized[key] = webdav_etag(normalized[key])
         elif rule == "http-date":
             try:
                 parsedate_to_datetime(normalized[key])
@@ -120,6 +170,9 @@ def comparable(case: dict[str, Any], normalization: dict[str, Any]) -> dict[str,
             token = boundary.group(1).encode()
             body = body.replace(token, b"<multipart-boundary>")
             headers["content-type"] = content_type.replace(boundary.group(1), "<multipart-boundary>")
+        canonical = canonical_dav_xml(body) if "xml" in content_type else None
+        if canonical is not None:
+            body = canonical
         result["body_sha256"] = hashlib.sha256(body).hexdigest()
         result["body_bytes"] = len(body)
     return result

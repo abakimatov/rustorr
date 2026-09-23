@@ -13,7 +13,7 @@ RUN_ROOT=${RUSTORR_CONTRACT_RUN_ROOT:-/tmp/rustorr-contract}
 MANIFEST=${ROOT}/tools/contract/scenarios.json
 ALLOWLIST=${ROOT}/tools/contract/deferred-routes.json
 
-usage() { printf '%s\n' "usage: $0 {doctor|config|up|candidate-up|candidate-down|auth-reference-up|auth-candidate-up|proxy-up|candidate-proxy-up|proxy-down|candidate-proxy-down|tls-up|tls-down|reset-seeder|restart-matrix|capture|diff|down}"; }
+usage() { printf '%s\n' "usage: $0 {doctor|config|up|fuse-probe|candidate-up|candidate-down|auth-reference-up|auth-candidate-up|proxy-up|candidate-proxy-up|proxy-down|candidate-proxy-down|tls-up|tls-down|reset-seeder|restart-matrix|capture|diff|down}"; }
 doctor() { command -v docker >/dev/null 2>&1 || { echo "error: docker CLI is not installed" >&2; return 1; }; docker compose version >/dev/null 2>&1 || { echo "error: docker compose is unavailable" >&2; return 1; }; docker info >/dev/null 2>&1 || { echo "error: Docker daemon is unavailable" >&2; return 1; }; }
 config() { ${COMPOSE} config; }
 up() { doctor; ${COMPOSE} up -d --force-recreate tracker seeder torrserver; }
@@ -73,6 +73,50 @@ tls_up() {
 tls_down() { doctor; ${PROXY_COMPOSE} rm -sf r2tls; }
 proxy_down() { doctor; ${PROXY_COMPOSE} rm -sf r2proxy; }
 candidate_proxy_down() { doctor; ${R6_PROXY_COMPOSE} rm -sf r6proxy; }
+# FUSE is not HTTP: mount it in the target, load the media fixture over the
+# API and record what a local program sees (tools/contract/r7/fuse_probe.sh).
+fuse_probe() {
+  doctor
+  target=${1:?fuse-probe target is required: reference or candidate}
+  run_id=${RUSTORR_CONTRACT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
+  output_dir=${RUN_ROOT}/${run_id}
+  mkdir -p "${output_dir}"
+  reset_seeder
+  if [ "${target}" = reference ]; then
+    compose="${R7_REFERENCE_COMPOSE} -f ${ROOT}/docker-compose.r7-fuse.yml"
+    service=torrserver
+    ${R7_CANDIDATE_COMPOSE} stop rustorr
+  else
+    compose="${R7_CANDIDATE_COMPOSE} -f ${ROOT}/docker-compose.r7-fuse-candidate.yml"
+    service=rustorr
+    ${R7_REFERENCE_COMPOSE} stop torrserver
+  fi
+  ${compose} up -d --force-recreate "${service}"
+  docker run --rm --network rustorr-r1_baseline rustorr-r1-fixture python3 -c "
+import json, time, urllib.request
+base = 'http://${service}:8090'
+for _ in range(60):
+    try:
+        urllib.request.urlopen(base + '/echo', timeout=5).read(); break
+    except Exception:
+        time.sleep(1)
+def call(body):
+    request = urllib.request.Request(base + '/torrents', data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
+    return urllib.request.urlopen(request, timeout=60).read()
+call({'action': 'add', 'link': 'file:///fixtures/torrents/unicode.torrent', 'save_to_db': True})
+for _ in range(120):
+    listed = json.loads(call({'action': 'list'}))
+    if listed and listed[0].get('stat') == 3:
+        break
+    time.sleep(1)
+else:
+    raise SystemExit('the media fixture never got its metadata')
+"
+  container=$(${compose} ps -q "${service}")
+  docker exec -i "${container}" sh -s /mnt/torrserver < "${ROOT}/tools/contract/r7/fuse_probe.sh" \
+    | python3 "${ROOT}/tools/contract/r7/fuse_normalize.py" > "${output_dir}/${target}-fuse.txt"
+  printf '%s\n' "${output_dir}/${target}-fuse.txt"
+}
 down() { doctor; ${COMPOSE} down; }
 capture() {
   target=${1:?capture target is required: reference or candidate}
@@ -177,5 +221,5 @@ diff_corpus() { reference=${1:?reference corpus is required}; candidate=${2:?can
 
 command=${1:-}; shift || true
 case "${command}" in
-  doctor) doctor ;; config) config ;; up) up ;; candidate-up) candidate_up ;; candidate-down) candidate_down ;; auth-reference-up) auth_reference_up ;; auth-candidate-up) auth_candidate_up ;; proxy-up) proxy_up ;; candidate-proxy-up) candidate_proxy_up ;; proxy-down) proxy_down ;; candidate-proxy-down) candidate_proxy_down ;; tls-up) tls_up ;; tls-down) tls_down ;; reset-seeder) reset_seeder ;; restart-matrix) restart_matrix "$@" ;; capture) capture "$@" ;; diff) diff_corpus "$@" ;; down) down ;; *) usage >&2; exit 2 ;;
+  doctor) doctor ;; config) config ;; up) up ;; candidate-up) candidate_up ;; candidate-down) candidate_down ;; auth-reference-up) auth_reference_up ;; auth-candidate-up) auth_candidate_up ;; proxy-up) proxy_up ;; candidate-proxy-up) candidate_proxy_up ;; proxy-down) proxy_down ;; candidate-proxy-down) candidate_proxy_down ;; tls-up) tls_up ;; tls-down) tls_down ;; reset-seeder) reset_seeder ;; restart-matrix) restart_matrix "$@" ;; fuse-probe) fuse_probe "$@" ;; capture) capture "$@" ;; diff) diff_corpus "$@" ;; down) down ;; *) usage >&2; exit 2 ;;
 esac

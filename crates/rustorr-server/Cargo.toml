@@ -10,6 +10,9 @@ name = "rustorr"
 path = "src/main.rs"
 
 [features]
+default = ["fuse"]
+# The FUSE mount (`--fuse-path`); fuser mounts without libfuse.
+fuse = ["dep:rustorr-fuse"]
 r5-test-control = []
 
 [dependencies]
@@ -21,6 +24,7 @@ rustorr-http.workspace = true
 rustorr-lifecycle.workspace = true
 rustorr-search.workspace = true
 rustorr-discovery.workspace = true
+rustorr-fuse = { workspace = true, optional = true }
 anyhow.workspace = true
 clap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "signal", "sync", "time", "fs", "io-util"] }

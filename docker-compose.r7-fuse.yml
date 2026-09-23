@@ -1,0 +1,10 @@
+# The reference mounts its FUSE file system; FUSE needs the device and the
+# right to mount inside the container.
+services:
+  torrserver:
+    command: ["-d", "/config", "-p", "8090", "--webdav", "--fusepath", "/mnt/torrserver"]
+    devices:
+      - /dev/fuse
+    cap_add: [NET_ADMIN, SYS_ADMIN]
+    security_opt:
+      - apparmor:unconfined
