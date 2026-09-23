@@ -51,6 +51,13 @@ impl TorrentLayout {
         self.file_lengths.get(file.zero_based() as usize).copied()
     }
 
+    pub fn file_offset(&self, file: FileIndex) -> Option<u64> {
+        self.file_lengths
+            .get(..file.zero_based() as usize)?
+            .iter()
+            .try_fold(0u64, |offset, length| offset.checked_add(*length))
+    }
+
     /// Validates that `len` bytes at `offset` lie inside `file`.
     pub(crate) fn check_range(
         &self,
@@ -106,6 +113,15 @@ impl PieceSet {
             .get(piece.get() as usize)
             .copied()
             .unwrap_or(false)
+    }
+
+    pub fn indexes(&self) -> Vec<PieceIndex> {
+        self.complete
+            .iter()
+            .enumerate()
+            .filter(|(_, complete)| **complete)
+            .map(|(index, _)| PieceIndex::new(u32::try_from(index).expect("piece index")))
+            .collect()
     }
 }
 

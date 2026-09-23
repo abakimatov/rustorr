@@ -1,16 +1,31 @@
-use std::{any::Any, future::Future, io, sync::Arc};
+use std::{
+    any::Any,
+    collections::HashMap,
+    future::Future,
+    io,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
+use async_stream::try_stream;
 use axum::{
     Router,
-    body::Body,
-    extract::{Json, Query, State},
-    http::{Request, Response, StatusCode, header},
-    middleware::map_response,
+    body::{Body, Bytes, to_bytes},
+    extract::{ConnectInfo, Multipart, Path, State},
+    http::{
+        HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri, header,
+    },
+    middleware::{Next, from_fn, from_fn_with_state, map_response},
     response::IntoResponse,
     routing::{get, post},
 };
-use rustorr_lifecycle::TorrentCoordinator;
-use serde_json::{Value, json};
+use rustorr_lifecycle::{
+    AddTorrent, CacheCommand, ClientCore, InfoHash, PlaybackRequest, Settings, SettingsCommand,
+    TorrentCommand, TorrentCoordinator, TorrentReply, TorrentView, UpdateTorrent, ViewedCommand,
+    WafCommand, WafLists, link_info_hash,
+};
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 use tower_http::{
@@ -19,249 +34,66 @@ use tower_http::{
 };
 use tracing::{Level, error, info_span};
 
-use crate::ApiError;
+use crate::{
+    ApiError,
+    access::{HttpConfig, WafSnapshot},
+    m3u,
+    range::{self, ByteRange, RangeError},
+};
 
-/// What the server tells clients about itself.
 #[derive(Debug, Clone)]
 pub struct ServerInfo {
     pub version: String,
 }
 
 #[derive(Clone)]
-struct PlaybackState {
+struct AppState {
     info: ServerInfo,
-    torrents: Arc<TorrentCoordinator>,
+    core: Arc<dyn ClientCore>,
+    http: HttpConfig,
 }
 
-/// The HTTP application.
 pub fn router(info: ServerInfo) -> Router {
-    with_layers(routes(info))
+    with_basic_layers(
+        Router::new()
+            .route("/echo", get(move || echo(info.clone())))
+            .fallback(not_found)
+            .method_not_allowed_fallback(not_found),
+    )
 }
 
-/// R5's deliberately narrow R1 workload surface. R6 replaces this with the
-/// contract-complete TorrServer router.
 pub fn router_with_lifecycle(info: ServerInfo, torrents: Arc<TorrentCoordinator>) -> Router {
-    with_layers(playback_routes(PlaybackState { info, torrents }))
+    let core: Arc<dyn ClientCore> = torrents;
+    router_with_core(info, core, HttpConfig::default())
 }
 
-/// Serves the application on `listener` until `shutdown` completes, then stops
-/// accepting connections and waits for open ones to finish.
-///
-/// That wait has no limit of its own: a connection that never finishes keeps
-/// the future pending. Callers that must stop by a deadline bound it
-/// themselves.
-pub async fn serve(
-    listener: tokio::net::TcpListener,
-    info: ServerInfo,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-) -> io::Result<()> {
-    axum::serve(listener, router(info))
-        .with_graceful_shutdown(shutdown)
-        .await
-}
-
-pub async fn serve_with_lifecycle(
-    listener: tokio::net::TcpListener,
-    info: ServerInfo,
-    torrents: Arc<TorrentCoordinator>,
-    shutdown: impl Future<Output = ()> + Send + 'static,
-) -> io::Result<()> {
-    axum::serve(listener, router_with_lifecycle(info, torrents))
-        .with_graceful_shutdown(shutdown)
-        .await
-}
-
-fn playback_routes(state: PlaybackState) -> Router {
-    Router::new()
-        .route("/echo", get(echo_playback))
+pub fn router_with_core(info: ServerInfo, core: Arc<dyn ClientCore>, http: HttpConfig) -> Router {
+    let state = AppState { info, core, http };
+    let routes = Router::new()
+        .route("/echo", get(echo_state))
         .route("/torrents", post(torrents))
-        .route("/stream", get(stream))
-        .with_state(state)
+        .route("/torrent/upload", post(upload))
+        .route("/settings", post(settings))
+        .route("/viewed", post(viewed))
+        .route("/cache", post(cache))
+        .route("/waf", get(get_waf).post(set_waf))
+        .route("/stream", get(stream_root).head(stream_root))
+        .route("/stream/{*fname}", get(stream_named).head(stream_named))
+        .route("/play/{hash}/{id}", get(play).head(play))
+        .route("/playlist", get(playlist_root))
+        .route("/playlist/{*fname}", get(playlist_named))
+        .route("/playlistall/all.m3u", get(playlist_all))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
-}
-
-fn routes(info: ServerInfo) -> Router {
-    Router::new()
-        .route("/echo", get(echo))
-        .with_state(info)
-        .fallback(not_found)
-        // The reference has no 405: a known path with the wrong method is a
-        // plain 404, exactly like an unknown path (`GET /settings`, R2 corpus).
-        .method_not_allowed_fallback(not_found)
-}
-
-/// axum adds `Allow` to the response for a wrong method even when the fallback
-/// is replaced, and does it after every layer of the router itself has run. The
-/// reference's 404 has no such header, so it is removed from outside.
-async fn without_allow_on_404(mut response: Response<Body>) -> Response<Body> {
-    if response.status() == StatusCode::NOT_FOUND {
-        response.headers_mut().remove(header::ALLOW);
-    }
-    response
-}
-
-async fn echo(State(info): State<ServerInfo>) -> String {
-    info.version
-}
-
-async fn echo_playback(State(state): State<PlaybackState>) -> String {
-    state.info.version
-}
-
-#[derive(serde::Deserialize)]
-struct TorrentAction {
-    action: String,
-    link: Option<String>,
-}
-
-fn lifecycle_error(error: impl std::fmt::Display) -> ApiError {
-    ApiError::Json {
-        status: StatusCode::BAD_REQUEST,
-        message: error.to_string(),
-    }
-}
-
-async fn torrents(
-    State(state): State<PlaybackState>,
-    Json(action): Json<TorrentAction>,
-) -> Result<Json<Value>, ApiError> {
-    match action.action.as_str() {
-        "add" => {
-            let link = action
-                .link
-                .ok_or_else(|| lifecycle_error("add requires link"))?;
-            let entry = state
-                .torrents
-                .add_link(&link)
-                .await
-                .map_err(lifecycle_error)?;
-            Ok(Json(json!({"hash": entry.hash.to_string()})))
-        }
-        "list" => {
-            let entries = state.torrents.list().map_err(lifecycle_error)?;
-            let mut response = Vec::with_capacity(entries.len());
-            for entry in entries {
-                let status = state.torrents.status(entry.hash).await;
-                response.push(json!({
-                    "hash": entry.hash.to_string(),
-                    "stat": if status.ready { 3 } else { 0 },
-                    "connected_seeders": status.live_peers,
-                }));
-            }
-            Ok(Json(Value::Array(response)))
-        }
-        "wipe" => {
-            for entry in state.torrents.list().map_err(lifecycle_error)? {
-                state
-                    .torrents
-                    .drop_torrent(entry.hash)
-                    .await
-                    .map_err(lifecycle_error)?;
-            }
-            Ok(Json(Value::Null))
-        }
-        _ => Err(lifecycle_error("unsupported R5 torrent action")),
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct StreamQuery {
-    link: String,
-    index: u32,
-}
-
-fn requested_range(
-    value: Option<&axum::http::HeaderValue>,
-) -> Result<(u64, Option<u64>), ApiError> {
-    let Some(value) = value else {
-        return Ok((0, None));
-    };
-    let text = value
-        .to_str()
-        .map_err(|_| lifecycle_error("invalid Range header"))?;
-    let bytes = text
-        .strip_prefix("bytes=")
-        .ok_or_else(|| lifecycle_error("only bytes ranges are supported"))?;
-    let (start, end) = bytes
-        .split_once('-')
-        .ok_or_else(|| lifecycle_error("invalid Range header"))?;
-    if start.is_empty() || bytes.contains(',') {
-        return Err(lifecycle_error("invalid Range header"));
-    }
-    let start = start
-        .parse()
-        .map_err(|_| lifecycle_error("invalid Range start"))?;
-    let end = (!end.is_empty())
-        .then(|| end.parse())
-        .transpose()
-        .map_err(|_| lifecycle_error("invalid Range end"))?;
-    Ok((start, end))
-}
-
-async fn stream(
-    State(state): State<PlaybackState>,
-    Query(query): Query<StreamQuery>,
-    request: Request<Body>,
-) -> Result<Response<Body>, ApiError> {
-    let (start, requested_end) = requested_range(request.headers().get(header::RANGE))?;
-    let entry = state
-        .torrents
-        .add_link(&query.link)
-        .await
-        .map_err(lifecycle_error)?;
-    let reader = state
-        .torrents
-        .play(entry.hash, query.index, start)
-        .await
-        .map_err(lifecycle_error)?;
-    let length = reader.file_length();
-    if start >= length {
-        return Err(ApiError::Status(StatusCode::RANGE_NOT_SATISFIABLE));
-    }
-    let end = requested_end.unwrap_or(length - 1).min(length - 1);
-    if end < start {
-        return Err(ApiError::Status(StatusCode::RANGE_NOT_SATISFIABLE));
-    }
-    let body_length = end - start + 1;
-    state
-        .torrents
-        .schedule_prefetch(entry.hash, query.index, end.saturating_add(1))
-        .await;
-    let body = Body::from_stream(ReaderStream::new(reader.take(body_length)));
-    Response::builder()
-        .status(StatusCode::PARTIAL_CONTENT)
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_LENGTH, body_length)
-        .header(
-            header::CONTENT_RANGE,
-            format!("bytes {start}-{end}/{length}"),
-        )
-        .body(body)
-        .map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))
-}
-
-async fn not_found() -> ApiError {
-    ApiError::NotFound
-}
-
-/// Wraps routes in the layers every request passes through.
-///
-/// Order, outermost first: tracing, then (added in R6) CORS, WAF and auth, then
-/// panic recovery. Recovery is innermost so a panicking handler still yields a
-/// response that the access layers and the trace log see as a normal `500`.
-///
-/// The routes are mounted as the fallback of an outer router because only
-/// layers of an outer router see the response after axum has finished with it.
-pub(crate) fn with_layers(routes: Router) -> Router {
-    let routes = routes.layer(CatchPanicLayer::custom(panicked));
+        .with_state(state.clone())
+        .layer(CatchPanicLayer::custom(panicked));
     Router::new()
         .fallback_service(routes)
+        .layer(from_fn(cors))
+        .layer(from_fn_with_state(state, waf))
         .layer(map_response(without_allow_on_404))
         .layer(
             TraceLayer::new_for_http()
-                // The path only: torrent links carry tracker URLs with
-                // credentials, so the query string must never reach a log.
                 .make_span_with(|request: &Request<Body>| {
                     info_span!(
                         "request",
@@ -271,6 +103,1359 @@ pub(crate) fn with_layers(routes: Router) -> Router {
                 })
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
+}
+
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    info: ServerInfo,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    axum::serve(
+        listener,
+        router(info).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+}
+
+pub async fn serve_with_lifecycle(
+    listener: tokio::net::TcpListener,
+    info: ServerInfo,
+    torrents: Arc<TorrentCoordinator>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    let core: Arc<dyn ClientCore> = torrents;
+    serve_with_core(listener, info, core, HttpConfig::default(), shutdown).await
+}
+
+pub async fn serve_with_core(
+    listener: tokio::net::TcpListener,
+    info: ServerInfo,
+    core: Arc<dyn ClientCore>,
+    http: HttpConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    axum::serve(
+        listener,
+        router_with_core(info, core, http).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+}
+
+fn with_basic_layers(routes: Router) -> Router {
+    let routes = routes.layer(CatchPanicLayer::custom(panicked));
+    Router::new()
+        .fallback_service(routes)
+        .layer(map_response(without_allow_on_404))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request<Body>| {
+                    info_span!(
+                        "request",
+                        method = %request.method(),
+                        path = %request.uri().path()
+                    )
+                })
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
+}
+
+async fn without_allow_on_404(mut response: Response<Body>) -> Response<Body> {
+    if response.status() == StatusCode::NOT_FOUND {
+        response.headers_mut().remove(header::ALLOW);
+    }
+    response
+        .headers_mut()
+        .insert(header::CONNECTION, HeaderValue::from_static("close"));
+    response
+}
+
+async fn echo(info: ServerInfo) -> String {
+    info.version
+}
+
+async fn echo_state(State(state): State<AppState>) -> String {
+    state.info.version
+}
+
+fn peer(request: &Request<Body>) -> IpAddr {
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or(IpAddr::V4(Ipv4Addr::LOCALHOST), |peer| peer.0.ip())
+}
+
+async fn waf(State(state): State<AppState>, request: Request<Body>, next: Next) -> Response<Body> {
+    let lists = match state.core.waf(WafCommand::Get).await {
+        Ok(lists) => lists,
+        Err(error) => {
+            error!(%error, "cannot load WAF lists");
+            return ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR).into_response();
+        }
+    };
+    if WafSnapshot::parse(lists).blocks(peer(&request), request.headers()) {
+        return (StatusCode::FORBIDDEN, "Banned").into_response();
+    }
+    next.run(request).await
+}
+
+async fn cors(request: Request<Body>, next: Next) -> Response<Body> {
+    if request.method() == Method::OPTIONS
+        && request.headers().contains_key(header::ORIGIN)
+        && request
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD)
+    {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        add_cors_headers(response.headers_mut(), request.headers());
+        return response;
+    }
+    let request_headers = request.headers().clone();
+    let mut response = next.run(request).await;
+    if request_headers.contains_key(header::ORIGIN) {
+        response.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_static("*"),
+        );
+    }
+    response
+}
+
+fn add_cors_headers(response: &mut HeaderMap, request: &HeaderMap) {
+    response.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    response.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET,POST,PUT,PATCH,HEAD,OPTIONS,DELETE"),
+    );
+    response.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static(
+            "Origin,Content-Length,Content-Type,X-Requested-With,Accept,Authorization,Mcp-Protocol-Version,Mcp-Session-Id,Last-Event-Id,Mcp-Method,Mcp-Name",
+        ),
+    );
+    response.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("43200"),
+    );
+    if request
+        .get("access-control-request-private-network")
+        .is_some_and(|value| value == "true")
+    {
+        response.insert(
+            HeaderName::from_static("access-control-allow-private-network"),
+            HeaderValue::from_static("true"),
+        );
+    }
+}
+
+fn unauthorized() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(
+            header::WWW_AUTHENTICATE,
+            "Basic realm=Authorization Required",
+        )
+        .body(Body::empty())
+        .expect("valid unauthorized response")
+}
+
+fn management_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+    state.http.authorized(headers)
+}
+
+async fn json_body<T: serde::de::DeserializeOwned>(request: Request<Body>) -> Result<T, ApiError> {
+    let bytes = to_bytes(request.into_body(), 4 << 20)
+        .await
+        .map_err(|error| json_bad_request(error.to_string()))?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        let message = if error.is_eof() {
+            "unexpected EOF".into()
+        } else {
+            error.to_string()
+        };
+        json_bad_request(message)
+    })
+}
+
+fn json_bad_request(message: impl Into<String>) -> ApiError {
+    ApiError::Json {
+        status: StatusCode::BAD_REQUEST,
+        message: message.into(),
+    }
+}
+
+fn lifecycle(error: impl std::fmt::Display) -> ApiError {
+    json_bad_request(error.to_string())
+}
+
+fn json_response(value: impl Serialize) -> Result<Response<Body>, ApiError> {
+    let bytes = serde_json::to_vec(&value)
+        .map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .body(Body::from(bytes))
+        .map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))
+}
+
+#[derive(Debug, Deserialize)]
+struct TorrentAction {
+    action: String,
+    #[serde(default)]
+    link: String,
+    hash: Option<String>,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    poster: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    data: String,
+    #[serde(default)]
+    save_to_db: bool,
+}
+
+async fn torrents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    if !management_authorized(&state, &headers) {
+        return Err(unauthorized());
+    }
+    let action: TorrentAction = json_body(request)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let command = match action.action.as_str() {
+        "add" => {
+            if action.link.is_empty() {
+                return Err(json_bad_request("link is empty").into_response());
+            }
+            TorrentCommand::Add(AddTorrent {
+                link: action.link,
+                title: action.title,
+                poster: action.poster,
+                category: action.category,
+                data: action.data,
+                save_to_db: action.save_to_db,
+            })
+        }
+        "get" => {
+            TorrentCommand::Get(required_hash(action.hash).map_err(IntoResponse::into_response)?)
+        }
+        "set" => TorrentCommand::Set(UpdateTorrent {
+            hash: required_hash(action.hash).map_err(IntoResponse::into_response)?,
+            title: action.title,
+            poster: action.poster,
+            category: action.category,
+            data: action.data,
+        }),
+        "rem" => {
+            TorrentCommand::Remove(required_hash(action.hash).map_err(IntoResponse::into_response)?)
+        }
+        "list" => TorrentCommand::List,
+        "drop" => {
+            TorrentCommand::Drop(required_hash(action.hash).map_err(IntoResponse::into_response)?)
+        }
+        "wipe" => TorrentCommand::Wipe,
+        other => {
+            return Err(json_bad_request(format!("unknown action: \"{other}\"")).into_response());
+        }
+    };
+    match state
+        .core
+        .torrents(command)
+        .await
+        .map_err(|error| lifecycle(error).into_response())?
+    {
+        TorrentReply::Torrent(Some(torrent)) => {
+            json_response(torrent).map_err(IntoResponse::into_response)
+        }
+        TorrentReply::Torrent(None) => Err(StatusCode::NOT_FOUND.into_response()),
+        TorrentReply::List(torrents) => {
+            json_response(torrents).map_err(IntoResponse::into_response)
+        }
+        TorrentReply::Empty => Ok(StatusCode::OK.into_response()),
+    }
+}
+
+fn required_hash(value: Option<String>) -> Result<InfoHash, ApiError> {
+    let value = value
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| json_bad_request("hash is empty"))?;
+    value
+        .parse()
+        .map_err(|_| json_bad_request("invalid info hash"))
+}
+
+async fn upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Result<Response<Body>, Response<Body>> {
+    if !management_authorized(&state, &headers) {
+        return Err(unauthorized());
+    }
+    let mut options = AddTorrent::default();
+    let mut files = Vec::new();
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| json_bad_request(error.to_string()).into_response())?
+    {
+        let name = field.name().unwrap_or_default().to_owned();
+        if field.file_name().is_some() {
+            files.push(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|error| json_bad_request(error.to_string()).into_response())?
+                    .to_vec(),
+            );
+            continue;
+        }
+        let value = field
+            .text()
+            .await
+            .map_err(|error| json_bad_request(error.to_string()).into_response())?;
+        match name.as_str() {
+            "save" => options.save_to_db = true,
+            "title" => options.title = value,
+            "poster" => options.poster = value,
+            "category" => options.category = value,
+            "data" => options.data = value,
+            _ => {}
+        }
+    }
+    let mut added = Vec::new();
+    for bytes in files {
+        if let TorrentReply::Torrent(Some(torrent)) = state
+            .core
+            .torrents(TorrentCommand::AddMetainfo {
+                bytes,
+                request: options.clone(),
+            })
+            .await
+            .map_err(|error| lifecycle(error).into_response())?
+        {
+            added.push(torrent);
+        }
+    }
+    if added.len() == 1 {
+        json_response(added.remove(0)).map_err(IntoResponse::into_response)
+    } else {
+        json_response(added).map_err(IntoResponse::into_response)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SettingsAction {
+    action: String,
+    sets: Option<Settings>,
+}
+
+async fn settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    if !management_authorized(&state, &headers) {
+        return Err(unauthorized());
+    }
+    let request: SettingsAction = json_body(request)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let command = match request.action.as_str() {
+        "get" => SettingsCommand::Get,
+        "set" => SettingsCommand::Set(Box::new(
+            request
+                .sets
+                .ok_or_else(|| json_bad_request("sets is empty").into_response())?,
+        )),
+        "def" => SettingsCommand::Defaults,
+        _ => return Err(ApiError::Status(StatusCode::BAD_REQUEST).into_response()),
+    };
+    let settings = state
+        .core
+        .settings(command)
+        .await
+        .map_err(|error| lifecycle(error).into_response())?;
+    if request.action == "get" {
+        json_response(settings).map_err(IntoResponse::into_response)
+    } else {
+        Ok(StatusCode::OK.into_response())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ViewedAction {
+    action: String,
+    #[serde(default)]
+    hash: String,
+    #[serde(default)]
+    file_index: i32,
+    #[serde(default)]
+    timecode: f64,
+}
+
+#[derive(Serialize)]
+struct ViewedResponse {
+    hash: String,
+    file_index: u32,
+    #[serde(serialize_with = "serialize_timecode")]
+    timecode: f64,
+}
+
+fn serialize_timecode<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if value.fract() == 0.0 && *value >= i64::MIN as f64 && *value <= i64::MAX as f64 {
+        serializer.serialize_i64(*value as i64)
+    } else {
+        serializer.serialize_f64(*value)
+    }
+}
+
+async fn viewed(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    if !management_authorized(&state, &headers) {
+        return Err(unauthorized());
+    }
+    let request: ViewedAction = json_body(request)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let hash = (!request.hash.is_empty())
+        .then(|| request.hash.parse::<InfoHash>())
+        .transpose()
+        .map_err(|error| json_bad_request(error.to_string()).into_response())?;
+    let command = match request.action.as_str() {
+        "set" => ViewedCommand::Set {
+            hash: hash.ok_or_else(|| json_bad_request("hash is required").into_response())?,
+            index: u32::try_from(request.file_index)
+                .map_err(|_| json_bad_request("file index is invalid").into_response())?,
+            timecode: request.timecode,
+        },
+        "rem" => ViewedCommand::Remove {
+            hash: hash.ok_or_else(|| json_bad_request("hash is required").into_response())?,
+            index: (request.file_index != -1)
+                .then(|| u32::try_from(request.file_index))
+                .transpose()
+                .map_err(|_| json_bad_request("file index is invalid").into_response())?,
+        },
+        "list" => ViewedCommand::List { hash },
+        _ => return Ok(StatusCode::OK.into_response()),
+    };
+    let viewed = state
+        .core
+        .viewed(command)
+        .await
+        .map_err(|error| lifecycle(error).into_response())?;
+    if request.action == "list" {
+        json_response(
+            viewed
+                .into_iter()
+                .map(|entry| ViewedResponse {
+                    hash: entry.hash.to_string(),
+                    file_index: entry.index,
+                    timecode: entry.timecode,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .map_err(IntoResponse::into_response)
+    } else {
+        Ok(StatusCode::OK.into_response())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CacheAction {
+    action: String,
+    #[serde(default)]
+    hash: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct CacheResponse {
+    hash: String,
+    capacity: u64,
+    filled: u64,
+    pieces_length: u64,
+    pieces_count: u32,
+    torrent: TorrentView,
+    pieces: HashMap<u32, CachePiece>,
+    readers: Vec<CacheReader>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct CachePiece {
+    id: u32,
+    length: u64,
+    size: u64,
+    completed: bool,
+    priority: i32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct CacheReader {
+    start: u64,
+    end: u64,
+    reader: u32,
+}
+
+async fn cache(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    if !management_authorized(&state, &headers) {
+        return Err(unauthorized());
+    }
+    let request: CacheAction = json_body(request)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    if request.action != "get" || request.hash.is_empty() {
+        return Err(ApiError::Status(StatusCode::BAD_REQUEST).into_response());
+    }
+    let hash: InfoHash = request
+        .hash
+        .parse()
+        .map_err(|_| json_bad_request("invalid info hash").into_response())?;
+    let cache = state
+        .core
+        .cache(CacheCommand::Get(hash))
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND.into_response())?;
+    let snapshot = cache
+        .snapshots
+        .first()
+        .ok_or_else(|| StatusCode::NOT_FOUND.into_response())?;
+    let torrent = match state
+        .core
+        .torrents(TorrentCommand::Get(hash))
+        .await
+        .map_err(|error| lifecycle(error).into_response())?
+    {
+        TorrentReply::Torrent(Some(torrent)) => *torrent,
+        _ => return Err(StatusCode::NOT_FOUND.into_response()),
+    };
+    let pieces: HashMap<_, _> = if snapshot.demanded_bytes != 0 {
+        snapshot
+            .demanded_pieces
+            .iter()
+            .map(|piece| {
+                (
+                    piece.piece.get(),
+                    CachePiece {
+                        id: piece.piece.get(),
+                        length: snapshot.piece_length,
+                        size: piece.size,
+                        completed: piece.completed,
+                        priority: 0,
+                    },
+                )
+            })
+            .collect()
+    } else {
+        snapshot
+            .completed_pieces
+            .iter()
+            .map(|piece| {
+                (
+                    piece.get(),
+                    CachePiece {
+                        id: piece.get(),
+                        length: snapshot.piece_length,
+                        size: snapshot.piece_length,
+                        completed: true,
+                        priority: 0,
+                    },
+                )
+            })
+            .collect()
+    };
+    json_response(CacheResponse {
+        hash: hash.to_string(),
+        capacity: cache.capacity,
+        filled: if snapshot.demanded_bytes == 0 {
+            snapshot.stored_bytes
+        } else {
+            snapshot.demanded_bytes
+        },
+        pieces_length: snapshot.piece_length,
+        pieces_count: snapshot.piece_count,
+        torrent,
+        pieces,
+        readers: snapshot
+            .active_readers
+            .iter()
+            .enumerate()
+            .map(|(index, range)| CacheReader {
+                start: range.start / snapshot.piece_length,
+                end: range.end.saturating_add(1).div_ceil(snapshot.piece_length),
+                reader: u32::try_from(range.start / snapshot.piece_length)
+                    .unwrap_or_else(|_| u32::try_from(index).unwrap_or(u32::MAX)),
+            })
+            .collect(),
+    })
+    .map_err(IntoResponse::into_response)
+}
+
+#[derive(Debug, Deserialize)]
+struct WafUpdate {
+    whitelist: String,
+    blacklist: String,
+    referers: String,
+}
+
+#[derive(Serialize)]
+struct WafResponse {
+    whitelist: String,
+    blacklist: String,
+    referers: String,
+    ip_enabled: bool,
+    referer_enabled: bool,
+    read_only: bool,
+    warnings: Vec<crate::access::WafWarning>,
+}
+
+fn waf_response(lists: WafLists) -> WafResponse {
+    let snapshot = WafSnapshot::parse(lists.clone());
+    WafResponse {
+        whitelist: lists.whitelist,
+        blacklist: lists.blacklist,
+        referers: lists.referers,
+        ip_enabled: snapshot.ip_enabled(),
+        referer_enabled: snapshot.referer_enabled(),
+        read_only: false,
+        warnings: snapshot.warnings,
+    }
+}
+
+async fn get_waf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response<Body>, Response<Body>> {
+    if !management_authorized(&state, &headers) {
+        return Err(unauthorized());
+    }
+    let lists = state
+        .core
+        .waf(WafCommand::Get)
+        .await
+        .map_err(|error| lifecycle(error).into_response())?;
+    json_response(waf_response(lists)).map_err(IntoResponse::into_response)
+}
+
+async fn set_waf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    if !management_authorized(&state, &headers) {
+        return Err(unauthorized());
+    }
+    let update: WafUpdate = json_body(request)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let lists = state
+        .core
+        .waf(WafCommand::Set(WafLists {
+            whitelist: update.whitelist,
+            blacklist: update.blacklist,
+            referers: update.referers,
+        }))
+        .await
+        .map_err(|error| lifecycle(error).into_response())?;
+    json_response(waf_response(lists)).map_err(IntoResponse::into_response)
+}
+
+async fn stream_root(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    let peer = peer(&request);
+    stream_impl(state, peer, None, request).await
+}
+
+async fn stream_named(
+    State(state): State<AppState>,
+    Path(fname): Path<String>,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    let peer = peer(&request);
+    stream_impl(state, peer, Some(fname), request).await
+}
+
+fn query(uri: &Uri) -> HashMap<String, String> {
+    uri.query()
+        .unwrap_or_default()
+        .split('&')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let (key, value) = part.split_once('=').unwrap_or((part, ""));
+            (percent_decode(key), percent_decode(value))
+        })
+        .collect()
+}
+
+fn percent_decode(value: &str) -> String {
+    percent_encoding::percent_decode_str(&value.replace('+', " "))
+        .decode_utf8_lossy()
+        .into_owned()
+}
+
+async fn stream_impl(
+    state: AppState,
+    peer: IpAddr,
+    fname: Option<String>,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    let query = query(request.uri());
+    let link = query.get("link").cloned().unwrap_or_default();
+    if link.is_empty() {
+        return Err(json_bad_request("link should not be empty").into_response());
+    }
+    let play = query.contains_key("play");
+    let playlist = query.contains_key("m3u");
+    if state.http.auth_enabled()
+        && !state.http.authorized(request.headers())
+        && (!(play || playlist) || !shareable_link_exists(&state, &link).await)
+    {
+        return Err(unauthorized());
+    }
+    let torrent = match state
+        .core
+        .torrents(TorrentCommand::Add(AddTorrent {
+            link,
+            title: query.get("title").cloned().unwrap_or_default(),
+            poster: query.get("poster").cloned().unwrap_or_default(),
+            category: query.get("category").cloned().unwrap_or_default(),
+            data: String::new(),
+            save_to_db: query.contains_key("save"),
+        }))
+        .await
+        .map_err(|error| lifecycle(error).into_response())?
+    {
+        TorrentReply::Torrent(Some(torrent)) => *torrent,
+        _ => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+    };
+    if query.contains_key("preload") {
+        let index = query
+            .get("index")
+            .and_then(|index| index.parse().ok())
+            .unwrap_or(1);
+        let hash = torrent
+            .hash()
+            .ok_or_else(|| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
+        let playback = state
+            .core
+            .clone()
+            .playback(PlaybackRequest {
+                hash,
+                index,
+                offset: 0,
+                end: Some(0),
+                prefetch_offset: Some(0),
+            })
+            .await
+            .map_err(|error| lifecycle(error).into_response())?;
+        drop(playback);
+    }
+    if query.contains_key("stat") {
+        return json_response(torrent).map_err(IntoResponse::into_response);
+    }
+    if playlist {
+        let base = state
+            .http
+            .public_base(peer, request.headers(), request.uri());
+        return individual_playlist(
+            &state,
+            &torrent,
+            &base,
+            fname.as_deref(),
+            query.contains_key("fromlast"),
+            query.get("index").and_then(|index| index.parse().ok()),
+            request.headers(),
+        )
+        .await
+        .map_err(IntoResponse::into_response);
+    }
+    if play {
+        let index = query
+            .get("index")
+            .and_then(|index| index.parse().ok())
+            .unwrap_or(1);
+        return raw_playback(state.core, torrent, index, request).await;
+    }
+    Ok(StatusCode::OK.into_response())
+}
+
+async fn shareable_link_exists(state: &AppState, link: &str) -> bool {
+    let Some(hash) = link_info_hash(link) else {
+        return false;
+    };
+    matches!(
+        state.core.torrents(TorrentCommand::Get(hash)).await,
+        Ok(TorrentReply::Torrent(Some(_)))
+    )
+}
+
+async fn play(
+    State(state): State<AppState>,
+    Path((hash, id)): Path<(String, u32)>,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    let hash: InfoHash = hash
+        .parse()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
+    match state.core.torrents(TorrentCommand::Get(hash)).await {
+        Ok(TorrentReply::Torrent(Some(_))) => {}
+        _ if state.http.auth_enabled() && !state.http.authorized(request.headers()) => {
+            return Err(unauthorized());
+        }
+        _ => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+    }
+    let torrent = match state
+        .core
+        .torrents(TorrentCommand::Add(AddTorrent {
+            link: hash.to_string(),
+            ..AddTorrent::default()
+        }))
+        .await
+    {
+        Ok(TorrentReply::Torrent(Some(torrent))) => *torrent,
+        _ => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+    };
+    raw_playback(state.core, torrent, id, request).await
+}
+
+async fn raw_playback(
+    core: Arc<dyn ClientCore>,
+    torrent: TorrentView,
+    index: u32,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    let hash = torrent
+        .hash()
+        .ok_or_else(|| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
+    let file = torrent
+        .file_stats
+        .iter()
+        .find(|file| file.id == index)
+        .cloned()
+        .ok_or_else(|| {
+            json_bad_request(format!("file with id {index} not found")).into_response()
+        })?;
+    let etag = file_etag(hash, &file.path);
+    let mime = mime_guess::from_path(&file.path)
+        .first_or_octet_stream()
+        .to_string();
+    if precondition_failed(request.headers(), &etag, torrent.timestamp) {
+        let mut response = StatusCode::PRECONDITION_FAILED.into_response();
+        playback_headers(
+            response.headers_mut(),
+            &mime,
+            &etag,
+            torrent.timestamp,
+            &request,
+        );
+        response.headers_mut().remove(header::CONTENT_TYPE);
+        return Ok(response);
+    }
+    if not_modified(request.headers(), &etag, torrent.timestamp) {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        playback_headers(
+            response.headers_mut(),
+            &mime,
+            &etag,
+            torrent.timestamp,
+            &request,
+        );
+        response.headers_mut().remove(header::CONTENT_TYPE);
+        response.headers_mut().remove(header::ACCEPT_RANGES);
+        response.headers_mut().remove(header::LAST_MODIFIED);
+        return Ok(response);
+    }
+    touch_viewed(&core, hash, index).await?;
+    let ranges = if request
+        .headers()
+        .get(header::IF_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| !if_range_matches(value, &etag, torrent.timestamp))
+    {
+        None
+    } else {
+        request
+            .headers()
+            .get(header::RANGE)
+            .and_then(|value| value.to_str().ok())
+    };
+    let ranges = match ranges.map(|value| range::parse(value, file.length)) {
+        None => None,
+        Some(Ok(ranges)) => Some(ranges),
+        Some(Err(RangeError::Invalid | RangeError::Unsatisfiable)) => {
+            let mut response = (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                "invalid range: failed to overlap\n",
+            )
+                .into_response();
+            response.headers_mut().insert(
+                header::CONTENT_RANGE,
+                HeaderValue::from_str(&format!("bytes */{}", file.length)).unwrap(),
+            );
+            playback_headers(
+                response.headers_mut(),
+                &mime,
+                &etag,
+                torrent.timestamp,
+                &request,
+            );
+            response.headers_mut().remove(header::ETAG);
+            response.headers_mut().remove(header::LAST_MODIFIED);
+            response.headers_mut().insert(
+                HeaderName::from_static("x-content-type-options"),
+                HeaderValue::from_static("nosniff"),
+            );
+            return Ok(response);
+        }
+    };
+    let method = request.method().clone();
+    let mut response = match ranges {
+        None => {
+            let playback = core
+                .clone()
+                .playback(PlaybackRequest {
+                    hash,
+                    index,
+                    offset: 0,
+                    end: Some(file.length.saturating_sub(1)),
+                    prefetch_offset: None,
+                })
+                .await
+                .map_err(|error| lifecycle(error).into_response())?;
+            let body = if method == Method::HEAD {
+                Body::empty()
+            } else {
+                Body::from_stream(ReaderStream::new(playback.reader.take(file.length)))
+            };
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_LENGTH, file.length)
+                .body(body)
+                .expect("valid full response")
+        }
+        Some(ranges) if ranges.len() == 1 => {
+            let range = ranges[0];
+            let playback = core
+                .clone()
+                .playback(PlaybackRequest {
+                    hash,
+                    index,
+                    offset: range.start,
+                    end: Some(range.end),
+                    prefetch_offset: None,
+                })
+                .await
+                .map_err(|error| lifecycle(error).into_response())?;
+            let body = if method == Method::HEAD {
+                Body::empty()
+            } else {
+                Body::from_stream(ReaderStream::new(playback.reader.take(range.len())))
+            };
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_LENGTH, range.len())
+                .header(
+                    header::CONTENT_RANGE,
+                    format!("bytes {}-{}/{}", range.start, range.end, file.length),
+                )
+                .body(body)
+                .expect("valid range response")
+        }
+        Some(ranges) => {
+            multipart_response(
+                core,
+                hash,
+                index,
+                file.length,
+                &mime,
+                ranges,
+                method == Method::HEAD,
+            )
+            .await?
+        }
+    };
+    playback_headers(
+        response.headers_mut(),
+        &mime,
+        &etag,
+        torrent.timestamp,
+        &request,
+    );
+    Ok(response)
+}
+
+async fn touch_viewed(
+    core: &Arc<dyn ClientCore>,
+    hash: InfoHash,
+    index: u32,
+) -> Result<(), Response<Body>> {
+    let existing = core
+        .viewed(ViewedCommand::List { hash: Some(hash) })
+        .await
+        .map_err(|error| lifecycle(error).into_response())?;
+    let timecode = existing
+        .iter()
+        .find(|entry| entry.index == index)
+        .map_or(0.0, |entry| entry.timecode);
+    core.viewed(ViewedCommand::Set {
+        hash,
+        index,
+        timecode,
+    })
+    .await
+    .map_err(|error| lifecycle(error).into_response())?;
+    Ok(())
+}
+
+fn playback_headers(
+    headers: &mut HeaderMap,
+    mime: &str,
+    etag: &str,
+    timestamp: i64,
+    request: &Request<Body>,
+) {
+    if !headers.contains_key(header::CONTENT_TYPE) {
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(mime).unwrap());
+    }
+    headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
+    headers.insert(
+        header::SERVER,
+        HeaderValue::from_static("TorrServer (Portable SDK for UPnP devices)"),
+    );
+    headers.insert(header::ETAG, HeaderValue::from_str(etag).unwrap());
+    headers.insert(
+        header::LAST_MODIFIED,
+        HeaderValue::from_str(&httpdate::fmt_http_date(system_time(timestamp))).unwrap(),
+    );
+    headers.insert(
+        HeaderName::from_static("x-stream-timeout"),
+        HeaderValue::from_static("30"),
+    );
+    headers.insert(
+        HeaderName::from_static("transfermode.dlna.org"),
+        HeaderValue::from_static("Streaming"),
+    );
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if request
+        .headers()
+        .contains_key("getcontentfeatures.dlna.org")
+    {
+        headers.insert(
+            HeaderName::from_static("contentfeatures.dlna.org"),
+            HeaderValue::from_static(
+                "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000",
+            ),
+        );
+    }
+}
+
+fn file_etag(hash: InfoHash, path: &str) -> String {
+    let value = format!("{hash}/{path}");
+    let encoded: String = value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("\"{encoded}\"")
+}
+
+fn system_time(timestamp: i64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(u64::try_from(timestamp).unwrap_or_default())
+}
+
+fn not_modified(headers: &HeaderMap, etag: &str, timestamp: i64) -> bool {
+    if let Some(value) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+    {
+        return value.split(',').any(|value| {
+            let value = value.trim().strip_prefix("W/").unwrap_or(value.trim());
+            value == etag || value == "*"
+        });
+    }
+    headers
+        .get(header::IF_MODIFIED_SINCE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| httpdate::parse_http_date(value).ok())
+        .is_some_and(|since| system_time(timestamp) <= since)
+}
+
+fn precondition_failed(headers: &HeaderMap, etag: &str, timestamp: i64) -> bool {
+    if let Some(value) = headers
+        .get(header::IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        && !value
+            .split(',')
+            .any(|value| value.trim() == etag || value.trim() == "*")
+    {
+        return true;
+    }
+    headers
+        .get(header::IF_UNMODIFIED_SINCE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| httpdate::parse_http_date(value).ok())
+        .is_some_and(|since| system_time(timestamp) > since)
+}
+
+fn if_range_matches(value: &str, etag: &str, timestamp: i64) -> bool {
+    if value.starts_with('"') {
+        return value == etag;
+    }
+    httpdate::parse_http_date(value)
+        .ok()
+        .is_some_and(|since| system_time(timestamp) <= since)
+}
+
+async fn multipart_response(
+    core: Arc<dyn ClientCore>,
+    hash: InfoHash,
+    index: u32,
+    full_length: u64,
+    mime: &str,
+    ranges: Vec<ByteRange>,
+    head: bool,
+) -> Result<Response<Body>, Response<Body>> {
+    // MatriX.145 uses Go's multipart writer: 30 random bytes, hex-encoded, so
+    // a 60-character boundary. The token value is dynamic, but its length is
+    // observable through Content-Length and therefore contractual.
+    let boundary = format!("{hash}{index:020}");
+    let content_type = format!("multipart/byteranges; boundary={boundary}");
+    let content_length = ranges
+        .iter()
+        .map(|range| {
+            u64::try_from(
+                format!(
+                    "--{boundary}\r\nContent-Range: bytes {}-{}/{full_length}\r\nContent-Type: {mime}\r\n\r\n",
+                    range.start, range.end
+                )
+                .len(),
+            )
+            .expect("multipart header length fits in u64")
+                + range.len()
+                + 2
+        })
+        .sum::<u64>()
+        + u64::try_from(format!("--{boundary}--\r\n").len())
+            .expect("multipart footer length fits in u64");
+    if head {
+        return Ok(Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CONTENT_LENGTH, content_length)
+            .body(Body::empty())
+            .unwrap());
+    }
+    let mime = mime.to_owned();
+    let stream_boundary = boundary.clone();
+    let stream: std::pin::Pin<
+        Box<dyn futures_core::Stream<Item = Result<Bytes, io::Error>> + Send>,
+    > = Box::pin(try_stream! {
+        for range in ranges {
+            yield Bytes::from(format!("--{stream_boundary}\r\nContent-Range: bytes {}-{}/{full_length}\r\nContent-Type: {mime}\r\n\r\n", range.start, range.end));
+            let playback = core.clone().playback(PlaybackRequest {
+                hash,
+                index,
+                offset: range.start,
+                end: Some(range.end),
+                prefetch_offset: None,
+            }).await.map_err(io::Error::other)?;
+            let mut reader = playback.reader.take(range.len());
+            let mut buffer = vec![0; 32 * 1024];
+            loop {
+                let count = reader.read(&mut buffer).await.map_err(io::Error::other)?;
+                if count == 0 { break; }
+                yield Bytes::copy_from_slice(&buffer[..count]);
+            }
+            yield Bytes::from_static(b"\r\n");
+        }
+        yield Bytes::from(format!("--{stream_boundary}--\r\n"));
+    });
+    let body = Body::from_stream(stream);
+    Ok(Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, content_length)
+        .body(body)
+        .unwrap())
+}
+
+async fn playlist_root(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    let peer = peer(&request);
+    playlist_impl(state, peer, None, request).await
+}
+
+async fn playlist_named(
+    State(state): State<AppState>,
+    Path(fname): Path<String>,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    let peer = peer(&request);
+    playlist_impl(state, peer, Some(fname), request).await
+}
+
+async fn playlist_impl(
+    state: AppState,
+    peer: IpAddr,
+    fname: Option<String>,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    let query = query(request.uri());
+    let hash = query
+        .get("hash")
+        .ok_or_else(|| ApiError::Status(StatusCode::BAD_REQUEST).into_response())?
+        .parse::<InfoHash>()
+        .map_err(|_| ApiError::Status(StatusCode::BAD_REQUEST).into_response())?;
+    let torrent = match state
+        .core
+        .torrents(TorrentCommand::Add(AddTorrent {
+            link: hash.to_string(),
+            ..AddTorrent::default()
+        }))
+        .await
+    {
+        Ok(TorrentReply::Torrent(Some(torrent))) => *torrent,
+        _ => return Err(StatusCode::NOT_FOUND.into_response()),
+    };
+    let base = state
+        .http
+        .public_base(peer, request.headers(), request.uri());
+    individual_playlist(
+        &state,
+        &torrent,
+        &base,
+        fname.as_deref(),
+        query.contains_key("fromlast"),
+        query.get("index").and_then(|index| index.parse().ok()),
+        request.headers(),
+    )
+    .await
+    .map_err(IntoResponse::into_response)
+}
+
+async fn individual_playlist(
+    state: &AppState,
+    torrent: &TorrentView,
+    base: &str,
+    fname: Option<&str>,
+    from_last: bool,
+    start_index: Option<u32>,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    let viewed = state
+        .core
+        .viewed(ViewedCommand::List {
+            hash: torrent.hash(),
+        })
+        .await
+        .map_err(lifecycle)?;
+    let name = m3u::playlist_name(fname, torrent.name.as_deref().unwrap_or(&torrent.title));
+    let hash = torrent.hash.as_deref().unwrap_or_default();
+    let etag = m3u::etag(hash, &name);
+    if not_modified(headers, &etag, torrent.timestamp) {
+        return Ok(Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .header(header::ETAG, etag)
+            .body(Body::empty())
+            .unwrap());
+    }
+    let body = m3u::one(torrent, base, from_last, start_index, &viewed);
+    m3u_response(name, etag, torrent.timestamp, body)
+}
+
+async fn playlist_all(
+    State(state): State<AppState>,
+    request: Request<Body>,
+) -> Result<Response<Body>, Response<Body>> {
+    if !management_authorized(&state, request.headers()) {
+        return Err(unauthorized());
+    }
+    let query = query(request.uri());
+    let torrents = match state
+        .core
+        .torrents(TorrentCommand::List)
+        .await
+        .map_err(|error| lifecycle(error).into_response())?
+    {
+        TorrentReply::List(torrents) => torrents,
+        _ => Vec::new(),
+    };
+    let settings = state
+        .core
+        .settings(SettingsCommand::Get)
+        .await
+        .map_err(|error| lifecycle(error).into_response())?;
+    let base = state
+        .http
+        .public_base(peer(&request), request.headers(), request.uri());
+    let body = m3u::all(
+        &torrents,
+        &base,
+        settings.merge_all_m3u,
+        query.get("category").map(String::as_str),
+        query.get("search").map(String::as_str),
+    );
+    let hash = torrents
+        .iter()
+        .filter_map(|torrent| torrent.hash.as_deref())
+        .collect::<String>();
+    m3u_response("all.m3u".into(), m3u::etag(&hash, "all.m3u"), 0, body)
+        .map_err(IntoResponse::into_response)
+}
+
+fn m3u_response(
+    name: String,
+    etag: String,
+    timestamp: i64,
+    body: String,
+) -> Result<Response<Body>, ApiError> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "audio/x-mpegurl")
+        .header(header::CONNECTION, "close")
+        .header(header::ETAG, etag)
+        .header(
+            header::LAST_MODIFIED,
+            httpdate::fmt_http_date(system_time(timestamp)),
+        )
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{name}\""),
+        )
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, body.len())
+        .body(Body::from(body))
+        .map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))
+}
+
+async fn not_found() -> ApiError {
+    ApiError::NotFound
 }
 
 fn panicked(payload: Box<dyn Any + Send + 'static>) -> Response<Body> {
@@ -284,284 +1469,249 @@ fn panicked(payload: Box<dyn Any + Send + 'static>) -> Response<Body> {
 }
 
 #[cfg(test)]
-// The serial lock is held across awaits on purpose: it serializes whole tests.
-#[allow(clippy::await_holding_lock)]
 mod tests {
-    use std::{
-        io,
-        sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError},
-    };
+    use std::{collections::HashMap, fs};
 
-    use axum::body::to_bytes;
+    use axum::{body::to_bytes, http::Request};
+    use rustorr_lifecycle::{InMemoryClientCore, TorrentFileView, ViewedCommand};
     use tower::ServiceExt;
-    use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
 
-    fn app() -> Router {
-        router(ServerInfo {
-            version: "rustorr 9.9.9".into(),
-        })
-    }
-
-    async fn call(
-        app: Router,
-        method: &str,
-        uri: &str,
-    ) -> (StatusCode, Vec<(String, String)>, Vec<u8>) {
-        let request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        let status = response.status();
-        let headers = response
-            .headers()
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_str().unwrap().to_owned()))
-            .collect();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        (status, headers, body.to_vec())
-    }
-
-    fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-        headers
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-    }
-
-    #[derive(Clone, Default)]
-    struct Log(Arc<Mutex<Vec<u8>>>);
-
-    impl io::Write for Log {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> MakeWriter<'a> for Log {
-        type Writer = Log;
-
-        fn make_writer(&'a self) -> Log {
-            self.clone()
-        }
-    }
-
-    impl Log {
-        fn text(&self) -> String {
-            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-        }
-
-        fn clear(&self) {
-            self.0.lock().unwrap().clear();
-        }
-    }
-
-    static SERIAL: Mutex<()> = Mutex::new(());
-    static LOG: OnceLock<Log> = OnceLock::new();
-
-    /// Every test that sends a request holds this for its whole body. The tests
-    /// share one global log, so what a log test reads must come from that test
-    /// alone. Thread-local subscribers per test are not an option: with tests
-    /// running in parallel, `tracing` intermittently dropped events (about one
-    /// run in seven).
-    fn serial() -> MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The shared log, emptied. Call it only while holding [`serial`].
-    fn logs() -> Log {
-        let log = LOG.get_or_init(|| {
-            let log = Log::default();
-            tracing_subscriber::fmt()
-                .with_writer(log.clone())
-                .with_ansi(false)
-                .with_max_level(Level::INFO)
-                .init();
-            log
+    #[tokio::test]
+    async fn echo_and_reference_404_shape_are_stable() {
+        let app = router(ServerInfo {
+            version: "MatriX.145".into(),
         });
-        log.clear();
-        log.clone()
-    }
-
-    async fn panics() -> &'static str {
-        panic!("boom")
-    }
-
-    #[test]
-    fn r5_range_parser_accepts_closed_and_open_ended_ranges() {
-        assert_eq!(
-            requested_range(Some(&header::HeaderValue::from_static("bytes=10-99"))).unwrap(),
-            (10, Some(99))
-        );
-        assert_eq!(
-            requested_range(Some(&header::HeaderValue::from_static("bytes=10-"))).unwrap(),
-            (10, None)
-        );
-        assert_eq!(requested_range(None).unwrap(), (0, None));
-    }
-
-    #[test]
-    fn r5_range_parser_rejects_suffix_and_multi_ranges() {
-        for value in ["bytes=-99", "bytes=0-1,4-5", "items=0-1", "bytes=bad-1"] {
-            assert!(requested_range(Some(&header::HeaderValue::from_static(value))).is_err());
-        }
-    }
-
-    fn panicking_app() -> Router {
-        with_layers(
-            Router::new()
-                .route("/panic", get(panics))
-                .route("/ok", get(|| async { "fine" })),
-        )
-    }
-
-    async fn raw_get(address: std::net::SocketAddr, path: &str) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-        let request = format!("GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n");
-        stream.write_all(request.as_bytes()).await.unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).await.unwrap();
-        response
-    }
-
-    #[tokio::test]
-    async fn serve_answers_over_tcp_and_stops_when_told_to() {
-        let _serial = serial();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-        let server = tokio::spawn(serve(
-            listener,
-            ServerInfo {
-                version: "rustorr 9.9.9".into(),
-            },
-            async {
-                let _ = stopped.await;
-            },
-        ));
-
-        let response = raw_get(address, "/echo").await;
-        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
-        assert!(response.ends_with("rustorr 9.9.9"), "{response}");
-
-        stop.send(()).unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri("/echo").body(Body::empty()).unwrap())
             .await
-            .expect("the server must stop once told to and idle")
-            .unwrap()
             .unwrap();
-        assert!(tokio::net::TcpStream::connect(address).await.is_err());
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            "MatriX.145"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/missing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(response.headers().get(header::ALLOW).is_none());
+    }
+
+    fn playback_app() -> (Router, Arc<InMemoryClientCore>, InfoHash) {
+        let hash: InfoHash = "0101010101010101010101010101010101010101".parse().unwrap();
+        let core = Arc::new(InMemoryClientCore::new());
+        core.insert(
+            TorrentView {
+                title: "Fixture".into(),
+                category: String::new(),
+                poster: String::new(),
+                data: None,
+                timestamp: 1_700_000_000,
+                name: Some("video.mp4".into()),
+                hash: Some(hash.to_string()),
+                torrs_hash: None,
+                stat: 3,
+                stat_string: "Torrent working".into(),
+                loaded_size: None,
+                torrent_size: Some(10),
+                download_speed: None,
+                upload_speed: None,
+                total_peers: None,
+                active_peers: None,
+                connected_seeders: None,
+                bytes_written: None,
+                bytes_read: None,
+                file_stats: vec![TorrentFileView {
+                    id: 1,
+                    path: "video.mp4".into(),
+                    length: 10,
+                    engine_index: 0,
+                }],
+            },
+            HashMap::from([(1, (0..10).collect())]),
+        )
+        .unwrap();
+        let client: Arc<dyn ClientCore> = core.clone();
+        (
+            router_with_core(
+                ServerInfo {
+                    version: "MatriX.145".into(),
+                },
+                client,
+                HttpConfig::default(),
+            ),
+            core,
+            hash,
+        )
     }
 
     #[tokio::test]
-    async fn echo_returns_the_configured_version() {
-        let _serial = serial();
-        let (status, headers, body) = call(app(), "GET", "/echo").await;
+    async fn raw_playback_supports_full_single_suffix_multipart_and_unsatisfied_ranges() {
+        let (app, _, hash) = playback_app();
+        for (range, status, expected) in [
+            (None, StatusCode::OK, (0..10).collect::<Vec<_>>()),
+            (
+                Some("bytes=2-4"),
+                StatusCode::PARTIAL_CONTENT,
+                vec![2, 3, 4],
+            ),
+            (Some("bytes=-2"), StatusCode::PARTIAL_CONTENT, vec![8, 9]),
+        ] {
+            let mut builder = Request::builder().uri(format!("/play/{hash}/1"));
+            if let Some(range) = range {
+                builder = builder.header(header::RANGE, range);
+            }
+            let response = app
+                .clone()
+                .oneshot(builder.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                expected
+            );
+        }
 
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, b"rustorr 9.9.9");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/play/{hash}/1"))
+                    .header(header::RANGE, "bytes=0-1,8-9")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        let content_type = response.headers()[header::CONTENT_TYPE].to_str().unwrap();
+        let boundary = content_type
+            .strip_prefix("multipart/byteranges; boundary=")
+            .unwrap();
+        assert_eq!(boundary.len(), 60);
+        let content_length = response.headers()[header::CONTENT_LENGTH]
+            .to_str()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.len(), content_length);
+        assert!(body.windows(2).any(|bytes| bytes == [0, 1]));
+        assert!(body.windows(2).any(|bytes| bytes == [8, 9]));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/play/{hash}/1"))
+                    .header(header::RANGE, "bytes=99-")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */10");
+        assert!(response.headers().get(header::ETAG).is_none());
+        assert!(response.headers().get(header::LAST_MODIFIED).is_none());
         assert_eq!(
-            header(&headers, "content-type"),
-            Some("text/plain; charset=utf-8")
+            to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+            "invalid range: failed to overlap\n"
         );
     }
 
     #[tokio::test]
-    async fn an_unknown_path_is_the_reference_404() {
-        let _serial = serial();
-        let (status, headers, body) = call(app(), "GET", "/no/such/route").await;
-
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body, b"404 page not found");
-        assert_eq!(header(&headers, "content-type"), Some("text/plain"));
-        assert_eq!(header(&headers, "content-length"), Some("18"));
+    async fn head_marks_the_file_viewed_without_returning_a_body() {
+        let (app, core, hash) = playback_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::HEAD)
+                    .uri(format!("/play/{hash}/1"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            core.viewed(ViewedCommand::List { hash: Some(hash) })
+                .await
+                .unwrap(),
+            [rustorr_lifecycle::ViewedFile {
+                hash,
+                index: 1,
+                timecode: 0.0,
+            }]
+        );
     }
 
     #[tokio::test]
-    async fn the_wrong_method_on_a_known_path_is_a_404_not_a_405() {
-        let _serial = serial();
-        for method in ["POST", "PUT", "DELETE", "PATCH"] {
-            let (status, headers, body) = call(app(), method, "/echo").await;
+    async fn cors_preflight_short_circuits_and_management_routes_require_basic_auth() {
+        let (_, core, _) = playback_app();
+        let directory = tempfile::tempdir().unwrap();
+        let accounts = directory.path().join("accs.db");
+        fs::write(&accounts, br#"{"client":"secret"}"#).unwrap();
+        let client: Arc<dyn ClientCore> = core;
+        let app = router_with_core(
+            ServerInfo {
+                version: "MatriX.145".into(),
+            },
+            client,
+            HttpConfig {
+                credentials: Some(crate::Credentials::read(&accounts).unwrap()),
+                ..HttpConfig::default()
+            },
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/torrents")
+                    .header(header::ORIGIN, "https://client.invalid")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
 
-            assert_eq!(status, StatusCode::NOT_FOUND, "{method}");
-            assert_eq!(body, b"404 page not found", "{method}");
-            assert_eq!(
-                header(&headers, "allow"),
-                None,
-                "{method} must not advertise methods"
-            );
-        }
-    }
+        let request = || {
+            Request::builder()
+                .method(Method::POST)
+                .uri("/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"action":"get"}"#))
+                .unwrap()
+        };
+        let response = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    #[tokio::test]
-    async fn a_panicking_handler_becomes_an_empty_500_and_the_app_keeps_serving() {
-        let _serial = serial();
-        let app = panicking_app();
-
-        let (status, _, body) = call(app.clone(), "GET", "/panic").await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(body.is_empty());
-
-        let (status, _, body) = call(app, "GET", "/ok").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, b"fine");
-    }
-
-    #[tokio::test]
-    async fn requests_are_logged_with_method_path_and_status() {
-        let _serial = serial();
-        let log = logs();
-
-        call(app(), "GET", "/echo").await;
-
-        let text = log.text();
-        assert!(text.contains("method=GET"), "{text}");
-        assert!(text.contains("path=/echo"), "{text}");
-        assert!(text.contains("status=200"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn the_query_string_never_reaches_the_log() {
-        let _serial = serial();
-        let log = logs();
-
-        call(
-            app(),
-            "GET",
-            "/echo?link=magnet:?xt=urn:btih:abc%26tr=http://t/announce?passkey=SECRET",
-        )
-        .await;
-
-        let text = log.text();
-        assert!(text.contains("path=/echo"), "{text}");
-        for leaked in ["SECRET", "passkey", "magnet", "link="] {
-            assert!(
-                !text.contains(leaked),
-                "{leaked} leaked into the log: {text}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_panic_is_logged_with_its_message_and_the_500_is_traced() {
-        let _serial = serial();
-        let log = logs();
-
-        call(panicking_app(), "GET", "/panic").await;
-
-        let text = log.text();
-        assert!(text.contains("request handler panicked"), "{text}");
-        assert!(text.contains("boom"), "{text}");
-        assert!(text.contains("status=500"), "{text}");
+        let mut authorized = request();
+        authorized.headers_mut().insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic Y2xpZW50OnNlY3JldA=="),
+        );
+        let response = app.oneshot(authorized).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

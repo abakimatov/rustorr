@@ -1,16 +1,18 @@
 {
-  "schema": "rustorr.r2.compatibility-matrix.v1",
+  "schema": "rustorr.r6.compatibility-matrix.v2",
   "reference": "TorrServer MatriX.145@2c7fa43b9ac64a9eda27314c0b6791518497f188",
   "categories": ["required", "capability-specific", "observed-reference", "not-characterized", "blocked"],
   "areas": [
-    {"area": "api", "classification": "required", "contract": "JSON actions, fields, types, empty arrays, nulls, errors and HTTP status"},
+    {"area": "torrents-upload", "classification": "required", "contract": "all torrent actions, live/catalog side effects, link codecs and multipart upload"},
+    {"area": "settings", "classification": "required", "contract": "41-field document, defaults, normalization, persistence and declared runtime effects"},
     {"area": "stream", "classification": "required", "contract": "GET/HEAD, Range, ETag, conditional requests, MIME and body bytes"},
     {"area": "playlist", "classification": "required", "contract": "M3U URLs, ordering, filenames and external-player directives"},
     {"area": "access", "classification": "required", "contract": "BasicAuth, CORS, WAF and forwarded host/proto behavior"},
-    {"area": "cache-viewed", "classification": "required", "contract": "cache/viewed state and HEAD side effects"},
+    {"area": "cache-viewed", "classification": "required", "contract": "cache snapshots, viewed timecodes, persistence and HEAD side effects"},
     {"area": "search-media", "classification": "capability-specific", "contract": "search, storage, TMDB, GStreamer and ffprobe availability and wire shape"},
     {"area": "mcp", "classification": "capability-specific", "contract": "MCP initialize response and protocol error shape"},
     {"area": "dlna-discovery", "classification": "capability-specific", "contract": "DLNA and Bonjour service behavior; HTTP probe only for DLNA"},
-    {"area": "webdav-fuse", "classification": "capability-specific", "contract": "WebDAV OPTIONS and FUSE HTTP route availability"}
+    {"area": "webdav-fuse", "classification": "capability-specific", "contract": "WebDAV OPTIONS and FUSE HTTP route availability"},
+    {"area": "service-tls", "classification": "capability-specific", "contract": "built-in TLS, redirects, service/install routes and legacy configuration aliases; owned by R9"}
   ]
 }

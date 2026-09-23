@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rustorr_domain::{FileIndex, InfoHash, PieceIndex};
 
 use crate::{Error, TorrentLayout};
@@ -43,6 +45,12 @@ pub trait PieceStore: Send + Sync {
     /// Persists the engine's verified-piece notification. Implementations that
     /// have no durable state may ignore it.
     fn piece_completed(&self, _torrent: InfoHash, _piece: PieceIndex) -> Result<(), Error> {
+        Ok(())
+    }
+
+    /// Deletes storage a previous process left for torrents outside `keep`.
+    /// Stores that keep nothing across processes have nothing to discard.
+    fn discard_except(&self, _keep: &HashSet<InfoHash>) -> Result<(), Error> {
         Ok(())
     }
 }

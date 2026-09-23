@@ -33,7 +33,18 @@ pub struct AddOptions {
 pub struct TorrentMetadata {
     pub hash: InfoHash,
     pub metainfo: Vec<u8>,
-    pub file_lengths: Vec<u64>,
+    pub name: String,
+    pub files: Vec<TorrentFile>,
+    pub trackers: Vec<String>,
+}
+
+/// A file as the engine addresses it. HTTP-facing one-based IDs are assigned
+/// after the lifecycle layer has sorted these paths like TorrServer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TorrentFile {
+    pub engine_index: u32,
+    pub path: String,
+    pub length: u64,
 }
 
 /// Runtime facts used by the narrow R5 readiness response. R6 will map the
@@ -42,6 +53,10 @@ pub struct TorrentMetadata {
 pub struct TorrentStatus {
     pub ready: bool,
     pub live_peers: usize,
+    pub progress_bytes: u64,
+    pub uploaded_bytes: u64,
+    pub download_speed: u64,
+    pub upload_speed: u64,
 }
 
 /// Facts captured immediately before an engine torrent is removed.
@@ -90,6 +105,7 @@ pub trait Engine: Send + Sync {
     fn status(&self) -> &EngineStatus;
     fn is_loaded(&self, hash: InfoHash) -> bool;
     fn source_hash(&self, source: &TorrentSource) -> Option<InfoHash>;
+    fn inspect_metainfo(&self, bytes: &[u8]) -> Result<TorrentMetadata, Error>;
     fn add(&self, source: TorrentSource, options: AddOptions) -> EngineFuture<'_, TorrentMetadata>;
     fn reader(
         &self,

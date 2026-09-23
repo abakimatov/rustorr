@@ -16,7 +16,7 @@ mod store;
 #[cfg(test)]
 mod testing;
 
-pub use cache::{Cache, CacheConfig, CacheStats, Pin};
+pub use cache::{Cache, CacheConfig, CacheStats, DemandedPiece, Pin, ReaderRange, TorrentSnapshot};
 pub use disk::DiskStore;
 pub use error::Error;
 pub use layout::TorrentLayout;

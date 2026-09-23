@@ -92,7 +92,10 @@ def main(destination: str) -> None:
         "multi": {"name": "multi", "disk_prefix": "multi", "files": [("part-a.bin", 3 * 1024 * 1024), ("part-b.bin", 5 * 1024 * 1024)]},
         "unicode": {
             "name": "Медиа коллекция",
-            "disk_prefix": "unicode",
+            # Multi-file torrents are rooted at the metainfo name in the
+            # seeder's download directory. Keep the on-disk fixture at that
+            # exact path so Transmission verifies and advertises it.
+            "disk_prefix": "Медиа коллекция",
             "files": [("01 Пример/Фильм.mkv", 512 * 1024), ("02 Пример/Фильм.srt", 32 * 1024), ("02 Пример/Фильм.ac3", 64 * 1024)],
         },
     }

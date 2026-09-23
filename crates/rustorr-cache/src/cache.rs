@@ -1,11 +1,14 @@
 use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use rustorr_domain::{FileIndex, InfoHash, PieceIndex};
 
-use crate::{Error, PieceStore, TorrentLayout, layout::PieceSet};
+use crate::{Error, PieceStore, TorrentLayout, extents::Extents, layout::PieceSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheConfig {
@@ -36,6 +39,35 @@ pub struct CacheStats {
     pub pinned_torrents: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReaderRange {
+    pub file: FileIndex,
+    pub start: u64,
+    pub end: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TorrentSnapshot {
+    pub torrent: InfoHash,
+    pub stored_bytes: u64,
+    pub piece_length: u64,
+    pub piece_count: u32,
+    pub completed_pieces: Vec<PieceIndex>,
+    /// Byte ranges actually delivered to client readers. The engine may fetch
+    /// whole pieces around a small Range request; TorrServer's cache API
+    /// reports the demanded bytes separately from that storage overhead.
+    pub demanded_bytes: u64,
+    pub demanded_pieces: Vec<DemandedPiece>,
+    pub active_readers: Vec<ReaderRange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DemandedPiece {
+    pub piece: PieceIndex,
+    pub size: u64,
+    pub completed: bool,
+}
+
 impl CacheStats {
     pub fn over_cap_bytes(&self) -> u64 {
         self.stored_bytes.saturating_sub(self.cap_bytes)
@@ -52,7 +84,8 @@ impl CacheStats {
 /// [`Cache::remove`]. The cache never calls the engine.
 pub struct Cache {
     store: Arc<dyn PieceStore>,
-    cap_bytes: u64,
+    cap_bytes: AtomicU64,
+    next_pin: AtomicU64,
     state: Mutex<State>,
 }
 
@@ -67,6 +100,8 @@ struct Entry {
     pieces: PieceSet,
     stored: u64,
     pins: usize,
+    readers: Vec<(u64, ReaderRange)>,
+    demanded: Extents,
     last_read: u64,
 }
 
@@ -88,7 +123,8 @@ impl Cache {
     pub fn new(store: Arc<dyn PieceStore>, config: CacheConfig) -> Self {
         Self {
             store,
-            cap_bytes: config.cap_bytes,
+            cap_bytes: AtomicU64::new(config.cap_bytes),
+            next_pin: AtomicU64::new(1),
             state: Mutex::default(),
         }
     }
@@ -122,10 +158,20 @@ impl Cache {
                 layout,
                 stored: recovered.stored_bytes,
                 pins: 0,
+                readers: Vec::new(),
+                demanded: Extents::default(),
                 last_read,
             },
         );
         Ok(())
+    }
+
+    /// Deletes storage a previous process left behind for torrents nobody
+    /// owns any more. Open torrents are always kept.
+    pub fn discard_unowned(&self, owned: &HashSet<InfoHash>) -> Result<(), Error> {
+        let mut keep = owned.clone();
+        keep.extend(self.state().torrents.keys().copied());
+        self.store.discard_except(&keep)
     }
 
     pub fn write(
@@ -179,14 +225,136 @@ impl Cache {
         Ok(self.state().entry(torrent)?.pieces.contains(piece))
     }
 
+    /// Records bytes returned through a client playback reader. This is kept
+    /// apart from physical engine writes because BitTorrent fetches complete
+    /// pieces even for a small HTTP Range.
+    pub fn record_demand(
+        &self,
+        torrent: InfoHash,
+        file: FileIndex,
+        offset: u64,
+        length: u64,
+    ) -> Result<(), Error> {
+        let mut state = self.state();
+        let entry = state.entry(torrent)?;
+        entry.layout.check_range(
+            torrent,
+            file,
+            offset,
+            usize::try_from(length).unwrap_or(usize::MAX),
+        )?;
+        let start = entry
+            .layout
+            .file_offset(file)
+            .ok_or(Error::UnknownFile { torrent, file })?
+            .checked_add(offset)
+            .ok_or(Error::InvalidLayout("demand offset overflows"))?;
+        let end = start
+            .checked_add(length)
+            .ok_or(Error::InvalidLayout("demand range overflows"))?;
+        entry
+            .demanded
+            .insert(rustorr_domain::ByteRange::new(start, end)?);
+        Ok(())
+    }
+
     /// Marks the torrent as being watched. While any [`Pin`] is alive the
     /// torrent cannot be evicted.
     pub fn pin(self: &Arc<Self>, torrent: InfoHash) -> Result<Pin, Error> {
-        self.state().entry(torrent)?.pins += 1;
+        self.pin_inner(torrent, None)
+    }
+
+    pub fn pin_range(
+        self: &Arc<Self>,
+        torrent: InfoHash,
+        range: ReaderRange,
+    ) -> Result<Pin, Error> {
+        self.pin_inner(torrent, Some(range))
+    }
+
+    fn pin_inner(
+        self: &Arc<Self>,
+        torrent: InfoHash,
+        range: Option<ReaderRange>,
+    ) -> Result<Pin, Error> {
+        let id = self.next_pin.fetch_add(1, Ordering::Relaxed);
+        let mut state = self.state();
+        let entry = state.entry(torrent)?;
+        entry.pins += 1;
+        if let Some(range) = range {
+            entry.readers.push((id, range));
+        }
         Ok(Pin {
             cache: Arc::clone(self),
             torrent,
+            id,
         })
+    }
+
+    /// Changes the runtime soft cap. Callers then ask the lifecycle owner to
+    /// apply the new eviction candidate list so engine/cache ordering remains
+    /// centralized.
+    pub fn set_cap_bytes(&self, cap_bytes: u64) {
+        self.cap_bytes.store(cap_bytes, Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self, torrent: InfoHash) -> Result<TorrentSnapshot, Error> {
+        let mut state = self.state();
+        let entry = state.entry(torrent)?;
+        let active_readers = entry
+            .readers
+            .iter()
+            .map(|(_, range)| {
+                let file_offset = entry.layout.file_offset(range.file).unwrap_or_default();
+                ReaderRange {
+                    file: range.file,
+                    start: file_offset.saturating_add(range.start),
+                    end: file_offset.saturating_add(range.end),
+                }
+            })
+            .collect();
+        let demanded_pieces = demanded_pieces(entry);
+        Ok(TorrentSnapshot {
+            torrent,
+            stored_bytes: entry.stored,
+            piece_length: entry.layout.piece_length(),
+            piece_count: entry.layout.piece_count(),
+            completed_pieces: entry.pieces.indexes(),
+            demanded_bytes: entry.demanded.total(),
+            demanded_pieces,
+            active_readers,
+        })
+    }
+
+    pub fn snapshots(&self) -> Vec<TorrentSnapshot> {
+        let state = self.state();
+        let mut snapshots: Vec<_> = state
+            .torrents
+            .iter()
+            .map(|(&torrent, entry)| TorrentSnapshot {
+                torrent,
+                stored_bytes: entry.stored,
+                piece_length: entry.layout.piece_length(),
+                piece_count: entry.layout.piece_count(),
+                completed_pieces: entry.pieces.indexes(),
+                demanded_bytes: entry.demanded.total(),
+                demanded_pieces: demanded_pieces(entry),
+                active_readers: entry
+                    .readers
+                    .iter()
+                    .map(|(_, range)| {
+                        let file_offset = entry.layout.file_offset(range.file).unwrap_or_default();
+                        ReaderRange {
+                            file: range.file,
+                            start: file_offset.saturating_add(range.start),
+                            end: file_offset.saturating_add(range.end),
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
+        snapshots.sort_by_key(|snapshot| *snapshot.torrent.as_bytes());
+        snapshots
     }
 
     /// Validates the lifecycle precondition for an engine delete without
@@ -205,7 +373,7 @@ impl Cache {
     pub fn eviction_candidates(&self) -> Vec<InfoHash> {
         let state = self.state();
         let stored: u64 = state.torrents.values().map(|entry| entry.stored).sum();
-        let mut excess = stored.saturating_sub(self.cap_bytes);
+        let mut excess = stored.saturating_sub(self.cap_bytes.load(Ordering::Relaxed));
 
         let mut idle: Vec<_> = state
             .torrents
@@ -245,11 +413,49 @@ impl Cache {
         let state = self.state();
         CacheStats {
             stored_bytes: state.torrents.values().map(|entry| entry.stored).sum(),
-            cap_bytes: self.cap_bytes,
+            cap_bytes: self.cap_bytes.load(Ordering::Relaxed),
             torrents: state.torrents.len(),
             pinned_torrents: state.torrents.values().filter(|e| e.pins > 0).count(),
         }
     }
+}
+
+fn demanded_pieces(entry: &Entry) -> Vec<DemandedPiece> {
+    let piece_length = entry.layout.piece_length();
+    let mut sizes = vec![0u64; entry.layout.piece_count() as usize];
+    for (start, end) in entry.demanded.spans() {
+        let first = start / piece_length;
+        let last = end.saturating_sub(1) / piece_length;
+        for piece in first..=last {
+            let piece_start = piece * piece_length;
+            let piece_end = (piece_start + piece_length).min(entry.layout.total_length());
+            let overlap = end.min(piece_end).saturating_sub(start.max(piece_start));
+            if let Some(size) = sizes.get_mut(piece as usize) {
+                *size += overlap;
+            }
+        }
+    }
+    sizes
+        .into_iter()
+        .enumerate()
+        .filter(|(_, size)| *size != 0)
+        .map(|(piece, size)| {
+            let piece = PieceIndex::new(u32::try_from(piece).expect("piece index"));
+            let actual_length = if piece.get() + 1 == entry.layout.piece_count() {
+                entry
+                    .layout
+                    .total_length()
+                    .saturating_sub(u64::from(piece.get()) * piece_length)
+            } else {
+                piece_length
+            };
+            DemandedPiece {
+                piece,
+                size,
+                completed: size == actual_length,
+            }
+        })
+        .collect()
 }
 
 /// A live view of a torrent. Dropping it unpins the torrent and counts as a
@@ -258,6 +464,7 @@ impl Cache {
 pub struct Pin {
     cache: Arc<Cache>,
     torrent: InfoHash,
+    id: u64,
 }
 
 impl Drop for Pin {
@@ -266,6 +473,7 @@ impl Drop for Pin {
         let tick = state.next_tick();
         if let Some(entry) = state.torrents.get_mut(&self.torrent) {
             entry.pins -= 1;
+            entry.readers.retain(|(id, _)| *id != self.id);
             entry.last_read = tick;
         }
     }
@@ -515,6 +723,32 @@ mod tests {
             cache.piece_completed(torrent(1), PieceIndex::new(3)),
             Err(Error::PieceOutOfRange { piece_count: 3, .. })
         ));
+    }
+
+    #[test]
+    fn client_demand_is_distinct_from_physical_piece_storage() {
+        let (cache, _) = cache_with(1024);
+        cache.open(torrent(1), layout()).unwrap();
+        cache.write(torrent(1), file(0), 0, &[0; 40]).unwrap();
+        cache
+            .piece_completed(torrent(1), PieceIndex::new(0))
+            .unwrap();
+
+        cache.record_demand(torrent(1), file(0), 5, 7).unwrap();
+        cache.record_demand(torrent(1), file(0), 10, 8).unwrap();
+
+        let snapshot = cache.snapshot(torrent(1)).unwrap();
+        assert_eq!(snapshot.stored_bytes, 40);
+        assert_eq!(snapshot.demanded_bytes, 13);
+        assert_eq!(
+            snapshot.demanded_pieces,
+            [DemandedPiece {
+                piece: PieceIndex::new(0),
+                size: 13,
+                completed: false,
+            }]
+        );
+        assert_eq!(snapshot.completed_pieces, [PieceIndex::new(0)]);
     }
 
     #[test]

@@ -2,36 +2,39 @@
 status: accepted
 ---
 
-# SQLite is Rustorr's persistent source of truth
+# SQLite — постоянный источник истины Rustorr
 
-## Context
+## Контекст
 
-Catalog entries, settings and viewed state must survive a restart and be
-portable independently of librqbit's internal persistence format. Rustorr
-also needs a future online-backup path.
+Записи каталога, настройки и состояние просмотренного должны переживать
+перезапуск и быть переносимыми независимо от внутреннего формата сохранения
+librqbit. Rustorr также нужен путь для будущего онлайн-бэкапа.
 
-## Decision
+## Решение
 
-`rustorr-state` stores state in `<data-dir>/rustorr.db` through bundled
-`rusqlite`. It owns migrations, sets a Rustorr-specific `application_id`,
-uses `user_version`, WAL mode and the SQLite default synchronous policy.
-Unknown application IDs and newer schemas are rejected before mutation.
+`rustorr-state` хранит состояние в `<data-dir>/rustorr.db` через встроенный
+(bundled) `rusqlite`. Он владеет миграциями, задаёт собственный
+`application_id` Rustorr, использует `user_version`, режим WAL и политику
+synchronous SQLite по умолчанию. Неизвестные application ID и более новые
+схемы отклоняются до любых изменений.
 
-Librqbit persistence and fast-resume are disabled. Its transient session,
-peers and runtime handles are reconstructed on startup; DHT routing data at
-`<data-dir>/engine/dht.json` is engine-owned and disposable.
+Сохранение и fast-resume librqbit отключены. Его временная сессия, пиры и
+runtime-handle восстанавливаются при старте; данные маршрутизации DHT в
+`<data-dir>/engine/dht.json` принадлежат движку и могут быть удалены.
 
-## Consequences
+## Последствия
 
-The database is the only persistent authority for Rustorr product data, which
-makes R9 backup/restore a SQLite concern rather than an engine-format concern.
-WAL needs an operational check on network filesystems in R9. `synchronous` is
-not tuned prematurely; durability/throughput measurements decide that later.
+База данных — единственный постоянный авторитет для продуктовых данных
+Rustorr, поэтому бэкап/восстановление в R9 становятся задачей SQLite, а не
+формата движка. WAL требует эксплуатационной проверки на сетевых файловых
+системах в R9. `synchronous` преждевременно не настраивается; это позже решат
+замеры надёжности и пропускной способности.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- Persist librqbit fast-resume as application state: rejected because its
-  contract was only evidenced for the same output directory and couples state
-  to the engine.
-- JSON files per feature: rejected because atomic multi-table migration,
-  integrity checking and online backup would be rebuilt ad hoc.
+- Сохранять fast-resume librqbit как состояние приложения: отклонено, потому
+  что его контракт подтверждён только для того же выходного каталога и
+  связывает состояние с движком.
+- Отдельные JSON-файлы на каждую функцию: отклонено, потому что атомарные
+  миграции нескольких таблиц, проверку целостности и онлайн-бэкап пришлось бы
+  собирать заново вручную.

@@ -18,7 +18,7 @@ use tokio::io::AsyncSeekExt;
 
 use crate::{
     AddOptions, CacheStorageFactory, DeletedTorrent, Engine, EngineConfig, EngineFuture,
-    EngineStatus, Error, TorrentMetadata, TorrentReader, TorrentSource, TorrentStatus,
+    EngineStatus, Error, TorrentFile, TorrentMetadata, TorrentReader, TorrentSource, TorrentStatus,
 };
 
 const SCRATCH_DIR: &str = "scratch";
@@ -82,6 +82,44 @@ impl LibrqbitEngine {
         self.loaded().contains_key(&hash)
     }
 
+    fn inspect_metainfo_inner(bytes: &[u8]) -> Result<TorrentMetadata, Error> {
+        let metainfo = torrent_from_bytes(bytes).map_err(|error| Error::Torrent(error.into()))?;
+        let hash = InfoHash::from_bytes(metainfo.info_hash.0);
+        let trackers = metainfo
+            .iter_announce()
+            .filter_map(|tracker| std::str::from_utf8(tracker.as_ref()).ok())
+            .map(str::to_owned)
+            .collect();
+        let info = metainfo
+            .info
+            .data
+            .clone()
+            .validate()
+            .map_err(|error| Error::Torrent(error.into()))?;
+        let name = info.name().unwrap_or_default().into_owned();
+        let multi_file = info.info().files.is_some();
+        let files = info
+            .iter_file_details()
+            .enumerate()
+            .map(|(index, file)| TorrentFile {
+                engine_index: u32::try_from(index).unwrap_or(u32::MAX),
+                path: display_path(
+                    &name,
+                    multi_file,
+                    &file.filename.to_pathbuf().to_string_lossy(),
+                ),
+                length: file.len,
+            })
+            .collect();
+        Ok(TorrentMetadata {
+            hash,
+            metainfo: bytes.to_vec(),
+            name,
+            files,
+            trackers,
+        })
+    }
+
     async fn add_inner(
         &self,
         source: TorrentSource,
@@ -114,10 +152,39 @@ impl LibrqbitEngine {
             .await
             .map_err(Error::Torrent)?;
         let metadata = handle
-            .with_metadata(|metadata| TorrentMetadata {
-                hash: InfoHash::from_bytes(handle.info_hash().0),
-                metainfo: metadata.torrent_bytes.to_vec(),
-                file_lengths: metadata.file_infos.iter().map(|file| file.len).collect(),
+            .with_metadata(|metadata| {
+                let name = metadata.info.name().unwrap_or_default().into_owned();
+                let multi_file = metadata.info.info().files.is_some();
+                TorrentMetadata {
+                    hash: InfoHash::from_bytes(handle.info_hash().0),
+                    metainfo: metadata.torrent_bytes.to_vec(),
+                    files: metadata
+                        .file_infos
+                        .iter()
+                        .enumerate()
+                        .map(|(index, file)| TorrentFile {
+                            engine_index: u32::try_from(index).unwrap_or(u32::MAX),
+                            path: display_path(
+                                &name,
+                                multi_file,
+                                &file.relative_filename.to_string_lossy(),
+                            ),
+                            length: file.len,
+                        })
+                        .collect(),
+                    name,
+                    trackers: librqbit_core::torrent_metainfo::torrent_from_bytes(
+                        &metadata.torrent_bytes,
+                    )
+                    .map(|metainfo| {
+                        metainfo
+                            .iter_announce()
+                            .filter_map(|tracker| std::str::from_utf8(tracker.as_ref()).ok())
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                }
             })
             .map_err(Error::Torrent)?;
         self.loaded().insert(metadata.hash, id);
@@ -167,12 +234,22 @@ impl LibrqbitEngine {
     fn torrent_status_inner(&self, hash: InfoHash) -> Result<TorrentStatus, Error> {
         let id = *self.loaded().get(&hash).ok_or(Error::NotLoaded(hash))?;
         let handle = self.handle(id).ok_or(Error::NotLoaded(hash))?;
-        let Some(live) = handle.live() else {
-            return Ok(TorrentStatus::default());
+        let stats = handle.stats();
+        let Some(live) = stats.live else {
+            return Ok(TorrentStatus {
+                ready: true,
+                progress_bytes: stats.progress_bytes,
+                uploaded_bytes: stats.uploaded_bytes,
+                ..TorrentStatus::default()
+            });
         };
         Ok(TorrentStatus {
             ready: true,
-            live_peers: live.per_peer_stats_snapshot(Default::default()).peers.len(),
+            live_peers: live.snapshot.peer_stats.live as usize,
+            progress_bytes: stats.progress_bytes,
+            uploaded_bytes: stats.uploaded_bytes,
+            download_speed: live.download_speed.as_bytes(),
+            upload_speed: live.upload_speed.as_bytes(),
         })
     }
 
@@ -222,6 +299,10 @@ impl Engine for LibrqbitEngine {
             TorrentSource::Url(_) => return None,
         };
         Some(InfoHash::from_bytes(id.0))
+    }
+
+    fn inspect_metainfo(&self, bytes: &[u8]) -> Result<TorrentMetadata, Error> {
+        Self::inspect_metainfo_inner(bytes)
     }
 
     fn add(&self, source: TorrentSource, options: AddOptions) -> EngineFuture<'_, TorrentMetadata> {
@@ -307,6 +388,19 @@ fn verify(config: &EngineConfig, status: &EngineStatus) -> Result<(), Error> {
         });
     }
     Ok(())
+}
+
+/// The path TorrServer shows for a file. anacrolix, behind MatriX.145, puts
+/// the torrent name in front of every file of a multi-file torrent; librqbit
+/// reports paths relative to that root. A single-file torrent's path is its
+/// name either way.
+fn display_path(name: &str, multi_file: bool, relative: &str) -> String {
+    let relative = relative.replace('\\', "/");
+    if multi_file {
+        format!("{name}/{relative}")
+    } else {
+        relative
+    }
 }
 
 #[cfg(test)]
@@ -550,5 +644,30 @@ mod tests {
         assert!(engine.is_loaded(hash));
 
         engine.shutdown().await;
+    }
+
+    /// A one-piece metainfo; `files` is the bencoded body of `length` or
+    /// `files`, which sorts before `name` as bencode requires.
+    fn metainfo(files: &str) -> Vec<u8> {
+        let mut bytes =
+            format!("d4:infod{files}4:name4:Root12:piece lengthi16384e6:pieces20:").into_bytes();
+        bytes.extend([0; 20]);
+        bytes.extend(b"ee");
+        bytes
+    }
+
+    #[test]
+    fn multi_file_paths_start_with_the_torrent_name_like_the_reference() {
+        let single = LibrqbitEngine::inspect_metainfo_inner(&metainfo("6:lengthi10e")).unwrap();
+        let multi = LibrqbitEngine::inspect_metainfo_inner(&metainfo(
+            "5:filesld6:lengthi5e4:pathl1:a5:x.mkveed6:lengthi5e4:pathl5:b.srteee",
+        ))
+        .unwrap();
+
+        let paths = |metadata: TorrentMetadata| -> Vec<String> {
+            metadata.files.into_iter().map(|file| file.path).collect()
+        };
+        assert_eq!(paths(single), ["Root"]);
+        assert_eq!(paths(multi), ["Root/a/x.mkv", "Root/b.srt"]);
     }
 }

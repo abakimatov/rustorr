@@ -11,7 +11,8 @@ transmission-daemon \
   --foreground \
   --config-dir="${config_dir}" \
   --port=9091 \
-  --rpc-bind-address=127.0.0.1 \
+  --rpc-bind-address=0.0.0.0 \
+  --allowed='127.0.0.1,172.*.*.*' \
   --no-auth \
   --no-dht \
   --no-lpd \

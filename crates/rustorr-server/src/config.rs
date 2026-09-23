@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use clap::{Parser, ValueEnum};
+use ipnet::IpNet;
 use rustorr_cache::CacheConfig;
 
 /// Every option can also be given as an environment variable.
@@ -41,6 +42,21 @@ pub struct Config {
     /// Do not announce to trackers.
     #[arg(long, env = "RUSTORR_DISABLE_TRACKERS")]
     pub disable_trackers: bool,
+
+    /// Require HTTP Basic authentication using `<data-dir>/accs.db`.
+    #[arg(long, env = "RUSTORR_HTTP_AUTH")]
+    pub http_auth: bool,
+
+    /// Comma-separated proxy CIDRs allowed to supply Forwarded and
+    /// X-Forwarded-Host/Proto for generated URLs. WAF decisions always use the
+    /// real socket peer, independently of this list.
+    #[arg(
+        long,
+        env = "RUSTORR_TRUSTED_PROXIES",
+        value_delimiter = ',',
+        default_value = "127.0.0.0/8,::1/128"
+    )]
+    pub trusted_proxies: Vec<IpNet>,
 
     /// Seconds to wait for open connections on shutdown before closing them.
     /// Keep it below the container runtime's stop timeout (10 s in Docker).
@@ -126,6 +142,8 @@ mod tests {
         assert_eq!(config.cache_size, CacheConfig::PROVISIONAL_CAP_BYTES);
         assert_eq!(config.peer_port, 0);
         assert!(!config.disable_dht && !config.disable_trackers);
+        assert!(!config.http_auth);
+        assert_eq!(config.trusted_proxies.len(), 2);
         assert_eq!(config.shutdown_grace, Duration::from_secs(5));
         assert_eq!(config.log_format, LogFormat::Text);
     }
@@ -145,6 +163,9 @@ mod tests {
             "51413",
             "--disable-dht",
             "--disable-trackers",
+            "--http-auth",
+            "--trusted-proxies",
+            "10.0.0.0/8,192.168.0.0/16",
             "--shutdown-grace",
             "2",
             "--log-format",
@@ -157,6 +178,8 @@ mod tests {
         assert_eq!(config.cache_size, 512 << 20);
         assert_eq!(config.peer_port, 51413);
         assert!(config.disable_dht && config.disable_trackers);
+        assert!(config.http_auth);
+        assert_eq!(config.trusted_proxies.len(), 2);
         assert_eq!(config.shutdown_grace, Duration::from_secs(2));
         assert_eq!(config.log_format, LogFormat::Json);
     }

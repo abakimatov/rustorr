@@ -1,36 +1,38 @@
-# R5 continuation
+# Продолжение R5
 
-Status: `done 2026-09-22` by explicit product decision.
+Статус: `done 2026-09-22` по явному продуктовому решению.
 
-The lifecycle/cache implementation is complete and the functional evidence is
-green. The approved release netem gate did not pass: Rustorr's two per-run p95
-values are `1518.228 ms` and `1652.650 ms` against a `988.317 ms` floor.
-The paired idle transport diagnosis found no reproducible Rustorr transport
-defect, and the user explicitly accepted closing R5 with this documented
-performance deviation. This is not a claim that `gate.passed=true`.
+Реализация жизненного цикла/кэша завершена, функциональные доказательства
+зелёные. Утверждённый release-гейт netem не пройден: два значения p95 по
+прогонам у Rustorr — `1518.228 ms` и `1652.650 ms` против порога
+`988.317 ms`. Парная диагностика транспорта в состоянии покоя не нашла
+воспроизводимого дефекта транспорта Rustorr, и пользователь явно принял
+закрытие R5 с этим задокументированным отклонением производительности. Это не
+утверждение, что `gate.passed=true`.
 
-## Re-open only if investigating the performance deviation
+## Переоткрывать только для расследования отклонения производительности
 
-1. Preserve the intentionally uncommitted tree on branch `r3-engine-spike`
-   at base HEAD `c0e42afde075d4871e2354592747d50af89b4d6a`. Inspect it with
-   `git status --short`; the R5 changes belong to this work.
-2. Rebuild the benchmark image before any measurement:
+1. Сохранить намеренно незакоммиченное дерево на ветке `r3-engine-spike` с
+   базовым HEAD `c0e42afde075d4871e2354592747d50af89b4d6a`. Проверить его
+   через `git status --short`; изменения R5 относятся к этой работе.
+2. Перед любым замером пересобрать benchmark-образ:
 
    ```sh
    docker compose -f docker-compose.baseline.yml \
      -f docker-compose.r5-benchmark.yml build rustorr
    ```
 
-   The working tree correctly uses the default 4 KiB
-   `ReaderStream::new(...)`. The current local
-   `rustorr-r1-rustorr:latest` image was built during the reverted 64 KiB
-   experiment and does not match the source.
-3. Diagnose the loss tail with matched TorrServer/Rustorr focused loops before
-   another candidate pair. Record per-sample `tc -s qdisc` drop deltas and TCP
-   retransmission counters outside the timed Range request. The question to
-   close is whether Rustorr produces a different loss/retransmission pattern,
-   not whether another random 20-request draw happens to pass.
-4. After an evidence-backed transport change, run the final candidate pair:
+   Рабочее дерево корректно использует `ReaderStream::new(...)` с 4 KiB по
+   умолчанию. Текущий локальный образ `rustorr-r1-rustorr:latest` собран во
+   время отменённого эксперимента с 64 KiB и не соответствует исходникам.
+3. Прежде чем запускать новую пару кандидатов, диагностировать хвост потерь
+   согласованными фокусными циклами TorrServer/Rustorr. Записывать дельты
+   отбрасываний `tc -s qdisc` по каждому замеру и счётчики ретрансмиссий TCP
+   вне замеряемого Range-запроса. Закрыть нужно вопрос, даёт ли Rustorr иной
+   паттерн потерь/ретрансмиссий, а не то, пройдёт ли случайно очередная
+   случайная выборка из 20 запросов.
+4. После подкреплённого доказательствами изменения транспорта запустить
+   финальную пару кандидатов:
 
    ```sh
    RUSTORR_R1_TARGET=rustorr tools/baseline/r1.sh run
@@ -42,12 +44,12 @@ performance deviation. This is not a claim that `gate.passed=true`.
      /tmp/rustorr-baseline/<run-2>/measurement.json
    ```
 
-5. The normal performance gate remains `gate.passed=true`: both runs complete,
-   zero errors, exactly 20 samples per run, and p95 at most `988.317 ms`.
-   It remains failed for the historic candidate pair; R5 is closed only by the
-   explicit exception recorded above.
+5. Обычный гейт производительности остаётся `gate.passed=true`: оба прогона
+   завершены, ноль ошибок, ровно 20 замеров на прогон и p95 не более
+   `988.317 ms`. Для исторической пары кандидатов он остаётся проваленным; R5
+   закрыт только по явному исключению, зафиксированному выше.
 
-Before handoff, run:
+Перед передачей работы запустить:
 
 ```sh
 tools/r4.sh check
@@ -63,7 +65,7 @@ docker compose -f docker-compose.baseline.yml \
 git diff --check
 ```
 
-Stop/remove only the R1/R5 services and preserve `r2proxy` and `r2tls`:
+Останавливать/удалять только сервисы R1/R5, сохраняя `r2proxy` и `r2tls`:
 
 ```sh
 docker compose -f docker-compose.baseline.yml \
@@ -74,171 +76,188 @@ docker compose -f docker-compose.baseline.yml \
   rm -f rustorr torrserver seeder tracker fixture
 ```
 
-Current runtime state: all R1/R5 services are stopped and removed. `r2proxy`
-and `r2tls` are still running. The raw reference, candidate, and restart
-artifacts listed below currently exist under `/tmp`; the committed source of
-truth for the accepted floor is `docs/benchmark-baseline.json` if `/tmp` is
-later cleaned.
+Текущее состояние выполнения: все сервисы R1/R5 остановлены и удалены.
+`r2proxy` и `r2tls` всё ещё работают. Сырые артефакты эталона, кандидата и
+перезапуска, перечисленные ниже, сейчас лежат в `/tmp`; если `/tmp` позже
+очистят, закоммиченным источником истины для принятого порога остаётся
+`docs/benchmark-baseline.json`.
 
-## Valid evidence
+## Действительные доказательства
 
-- `tools/r4.sh check` passes the seven-crate boundary guard, rustfmt, clippy
-  with `-D warnings`, and all 179 workspace tests.
+- `tools/r4.sh check` проходит проверку границ семи crate, rustfmt, clippy с
+  `-D warnings` и все 179 тестов workspace.
 - `tools/r4.sh cargo test -p rustorr-server --features r5-test-control
-  --locked` passes all 20 server tests with the benchmark-only control
-  feature enabled.
-- Two independent release measurements under the rebaselined method completed
-  every original R1 scenario:
-  `/tmp/rustorr-baseline/20260921T164519Z/measurement.json` and
-  `/tmp/rustorr-baseline/20260921T164721Z/measurement.json`. Each reports
-  `complete=true`, zero request/integrity/precondition/control errors, and
-  valid HTTP 206 bodies, lengths, `Content-Range` values and fixture digests.
-- Their gate aggregate is
-  `/tmp/rustorr-baseline/r5-rebaseline-aggregate.json`. Passing p95 checks are
-  cold known `8764.526 <= 10911.5 ms`, warm known `4.343 <= 4976.2 ms`, and
-  seek-loaded `392.656 <= 4512.8 ms`. Seek-missing is bounded at `519.657 ms`
-  and deterministic seek-evicted at `9029.849 ms`; the latter is reported
-  without a parity floor. Peer-departure recovery is `1.966 ms` with no
-  failure.
-- The added diagnostic `magnet_first_range_ms` is `4529.068 ms` p95. It has no
-  parity floor. Magnet metadata discovery itself is `11085.005 ms` p95.
-- `/tmp/rustorr-baseline/20260921T151011Z-restart/restart-probe.json` proves
-  restart recovery: before and after restart both return HTTP 206 and digest
+  --locked` проходит все 20 тестов сервера с включённой benchmark-only
+  управляющей функцией.
+- Два независимых release-замера по перебазированной методике выполнили все
+  исходные сценарии R1:
+  `/tmp/rustorr-baseline/20260921T164519Z/measurement.json` и
+  `/tmp/rustorr-baseline/20260921T164721Z/measurement.json`. Каждый сообщает
+  `complete=true`, ноль ошибок запросов/целостности/предусловий/управления и
+  корректные тела HTTP 206, длины, значения `Content-Range` и дайджесты
+  фикстур.
+- Их агрегат гейта —
+  `/tmp/rustorr-baseline/r5-rebaseline-aggregate.json`. Пройденные проверки
+  p95: холодный известный `8764.526 <= 10911.5 ms`, тёплый известный
+  `4.343 <= 4976.2 ms` и seek-loaded `392.656 <= 4512.8 ms`. Seek-missing
+  ограничен `519.657 ms`, детерминированный seek-evicted — `9029.849 ms`;
+  последний сообщается без порога паритета. Восстановление после ухода пира
+  — `1.966 ms` без сбоев.
+- Добавленная диагностика `magnet_first_range_ms` — `4529.068 ms` p95. Порога
+  паритета у неё нет. Само обнаружение метаданных magnet — `11085.005 ms`
+  p95.
+- `/tmp/rustorr-baseline/20260921T151011Z-restart/restart-probe.json`
+  доказывает восстановление после перезапуска: до и после перезапуска оба
+  чтения возвращают HTTP 206 и дайджест
   `31e67ed8a3c058d5d68dfac1cd83c24b6ade45ffea0f7833d8eaa3951eae643b`;
-  the second read is served after the seeder is stopped in `3.263 ms`.
+  второе чтение отдаётся за `3.263 ms` после остановки сидера.
 
-## Blocking scenario
+## Блокирующий сценарий
 
-The approved method keeps the scenario ID and 80 ms / 1% model, collects 20
-Range samples per run, and uses the maximum of two pinned TorrServer per-run
-p95 values as the symmetric floor. Reference runs
-`20260921T163650Z` and `20260921T163912Z` produced `988.317 ms` and
-`986.719 ms`, setting the floor to `988.317 ms`; their aggregate is
+Утверждённая методика сохраняет ID сценария и модель 80 ms / 1%, собирает 20
+Range-замеров на прогон и использует максимум из двух значений p95 по
+прогонам зафиксированного TorrServer как симметричный порог. Эталонные
+прогоны `20260921T163650Z` и `20260921T163912Z` дали `988.317 ms` и
+`986.719 ms`, установив порог `988.317 ms`; их агрегат —
 `/tmp/rustorr-baseline/netem-reference-aggregate.json`.
 
-Rustorr runs `20260921T164519Z` and `20260921T164721Z` produced per-run p95
-values of `1518.228 ms` and `1652.650 ms`. Both collected exactly 20 correct
-HTTP 206 ranges and all netem apply/clear controls succeeded, but both exceed
-the reference floor. Every other close-gate check passes.
+Прогоны Rustorr `20260921T164519Z` и `20260921T164721Z` дали значения p95
+`1518.228 ms` и `1652.650 ms`. Оба собрали ровно 20 корректных диапазонов
+HTTP 206, все операции применения/снятия netem прошли успешно, но оба
+превышают эталонный порог. Все остальные проверки гейта закрытия проходят.
 
-### Netem gate diagnosis
+### Диагностика гейта netem
 
-A focused 20-request cached-Range loop established that the original
-single-request `579.7 ms` floor was invalid. It does not override the current
-repeated-sample gate or prove that Rustorr's current tail is equivalent:
+Фокусный цикл из 20 запросов к закэшированному Range установил, что исходный
+порог `579.7 ms` по одному запросу был недействителен. Это не отменяет
+текущий гейт с повторными замерами и не доказывает, что текущий хвост Rustorr
+эквивалентен:
 
-- Rustorr: p95 `754.453 ms`, 18/20 samples above `579.7 ms`, about 184–186
-  response packets per sample.
-- TorrServer MatriX.145 under the same 80 ms / 1% control: p95 `1334.163 ms`,
-  18/20 samples above `579.7 ms`, about 185–194 packets per sample.
-- With zero qdisc drops, medians are `585.387 ms` for Rustorr and
-  `589.802 ms` for TorrServer. One-to-three random drops produce the same
-  `~0.65–1.5 s` retransmission tail on both servers.
+- Rustorr: p95 `754.453 ms`, 18/20 замеров выше `579.7 ms`, около 184–186
+  пакетов ответа на замер.
+- TorrServer MatriX.145 под тем же контролем 80 ms / 1%: p95 `1334.163 ms`,
+  18/20 замеров выше `579.7 ms`, около 185–194 пакетов на замер.
+- При нуле отбрасываний qdisc медианы — `585.387 ms` у Rustorr и
+  `589.802 ms` у TorrServer. От одного до трёх случайных отбрасываний дают
+  одинаковый хвост ретрансмиссий `~0.65–1.5 s` на обоих серверах.
 
-Raw focused results are `/tmp/rustorr-netem-before.json` and
-`/tmp/torrserver-netem-reference.json`. The committed R1 artifact confirms why
-the floor is unstable: `docs/benchmark-baseline.json` records
-`netem-delay-loss.runs = 1`; `579.7 ms` is one controlled request, not a p95
-from the claimed two-run sample. The other reference run records an
-uncontrolled wrapper placeholder and cannot contribute to this floor.
+Сырые фокусные результаты — `/tmp/rustorr-netem-before.json` и
+`/tmp/torrserver-netem-reference.json`. Закоммиченный артефакт R1
+подтверждает, почему порог нестабилен: `docs/benchmark-baseline.json`
+фиксирует `netem-delay-loss.runs = 1`; `579.7 ms` — это один контролируемый
+запрос, а не p95 из заявленной выборки двух прогонов. Другой эталонный прогон
+фиксирует неконтролируемую заглушку обёртки и не может участвовать в этом
+пороге.
 
-The repeated-sample methodology was explicitly approved and is now implemented
-in the harness. An additional Rustorr loop that recorded qdisc counters found
-the long requests coinciding with random drops (for example one drop at
-`1339.305 ms` and four at `1505.572 ms`) while server traces still completed
-request setup in `0 ms`. This supports a network retransmission tail, but it
-does not override the accepted comparison. The next action is to improve or
-further isolate Rustorr's HTTP/TCP body delivery under loss and then produce
-two new complete candidate runs; the current failed pair remains evidence.
+Методика с повторными замерами была явно утверждена и теперь реализована в
+стенде. Дополнительный цикл Rustorr с записью счётчиков qdisc показал, что
+долгие запросы совпадают со случайными отбрасываниями (например, одно
+отбрасывание при `1339.305 ms` и четыре при `1505.572 ms`), тогда как трассы
+сервера по-прежнему завершали подготовку запроса за `0 ms`. Это
+подтверждает хвост сетевых ретрансмиссий, но не отменяет принятое сравнение.
+Следующее действие — улучшить или дополнительно изолировать доставку тела
+HTTP/TCP в Rustorr при потерях, а затем получить два новых полных прогона
+кандидата; текущая проваленная пара остаётся доказательством.
 
-### 2026-09-22 paired idle transport diagnosis
+### Парная диагностика транспорта в состоянии покоя 2026-09-22
 
-`tools/baseline/netem_diagnose.py` is a benchmark-only focused loop invoked by
-`tools/baseline/r1.sh netem-diagnose`. It waits for the target API, wipes and
-re-adds the fixture, warms offsets `0` and `4194304`, then requires two quiet
-network-interface intervals before applying the unchanged `80 ms / 1%` model.
-For every one of 20 timed Range requests it records the `tc -s qdisc` delta
-and multiple `ss -tin` TCP observations from the target network namespace.
-Missing qdisc or TCP observations make an artifact incomplete.
+`tools/baseline/netem_diagnose.py` — benchmark-only фокусный цикл, который
+вызывается через `tools/baseline/r1.sh netem-diagnose`. Он ждёт API цели,
+очищает и заново добавляет фикстуру, прогревает смещения `0` и `4194304`,
+затем требует двух тихих интервалов сетевого интерфейса перед применением
+неизменной модели `80 ms / 1%`. Для каждого из 20 замеряемых Range-запросов он
+записывает дельту `tc -s qdisc` и несколько наблюдений TCP `ss -tin` из
+сетевого namespace цели. Отсутствие наблюдений qdisc или TCP делает артефакт
+неполным.
 
-Two complete, idle-gated artifacts are:
+Два полных артефакта с гейтом покоя:
 
 - TorrServer: `/tmp/rustorr-baseline/20260922T062935Z-netem-diagnose-torrserver/netem-diagnosis.json`;
-  p95 `727.218 ms`. Its 12 zero-drop samples are `484.380–583.170 ms`; its
-  loss distribution is 12 zero, 4 one, 3 two and 1 five-drop sample.
+  p95 `727.218 ms`. Его 12 замеров без отбрасываний — `484.380–583.170 ms`;
+  распределение потерь: 12 замеров с нулём, 4 с одним, 3 с двумя и 1 с пятью
+  отбрасываниями.
 - Rustorr: `/tmp/rustorr-baseline/20260922T063305Z-netem-diagnose-rustorr/netem-diagnosis.json`;
-  p95 `1488.191 ms`. Its 7 zero-drop samples are `485.387–573.240 ms`; its
-  random loss distribution is 7 zero, 5 one, 6 two and 2 three-drop samples.
+  p95 `1488.191 ms`. Его 7 замеров без отбрасываний — `485.387–573.240 ms`;
+  случайное распределение потерь: 7 замеров с нулём, 5 с одним, 6 с двумя и 2
+  с тремя отбрасываниями.
 
-The HTTP packet budgets are stable (TorrServer median `197`, Rustorr median
-`185` packets) and both targets record TCP retransmissions when qdisc drops.
-The focused loop therefore isolates the observed tail to the random netem/TCP
-loss sequence rather than a reproducible Rustorr pre-send or warm-cache delay.
-It is not a replacement for the approved release harness and does not change
-the `988.317 ms` floor. It supplies the evidence for the explicit product
-decision to close R5 with the failed gate recorded as a deviation; a future
-transport change must still pass two complete release runs under that gate.
+Бюджеты HTTP-пакетов стабильны (медиана TorrServer `197`, Rustorr `185`
+пакетов), и обе цели фиксируют ретрансмиссии TCP при отбрасываниях qdisc.
+Следовательно, фокусный цикл сводит наблюдаемый хвост к случайной
+последовательности потерь netem/TCP, а не к воспроизводимой задержке Rustorr
+до отправки или на тёплом кэше. Он не заменяет утверждённый release-стенд и не
+меняет порог `988.317 ms`. Он даёт доказательства для явного продуктового
+решения закрыть R5 с проваленным гейтом, записанным как отклонение; будущее
+изменение транспорта всё равно должно пройти два полных release-прогона под
+этим гейтом.
 
-## Implemented
+## Реализовано
 
-- The object-safe `Engine` port uses boxed futures for add/read/status/delete;
-  `TorrentCoordinator` depends on `Arc<dyn Engine>`. The librqbit registry is
-  changed only after successful session deletion.
-- Eviction cancels and joins owned prefetch work, refuses a live playback pin
-  before mutating engine/cache/SQLite, preserves live peer addresses for lazy
-  re-add, and drops those hints on normal removal. Reader release and prefetch
-  completion serialize soft-cap enforcement. Structured events record the
-  reason, freed/remaining/cap bytes, pin state, peer-hint count and re-add time.
-- Repeated add returns the existing catalog entry without changing
-  `added_at` or repeating an engine add. Runtime `stat` and
-  `connected_seeders` come from librqbit status; R5 counts live peers.
-- Disk recovery persists atomic layouts, extents and verified pieces. A new
-  engine can read a recovered range without a peer; corrupt or mismatched
-  manifests are discarded.
-- The measurement client bounds curl and subprocess time, atomically records
-  partial state, fails fast on preconditions, and validates every Range byte.
-  Fixture generation and validation share one deterministic payload helper.
-  Netem is applied by the existing tooling image in the target network
-  namespace, keeping `tc` out of the production image.
-- `r1.sh` checks curl, always reports the output directory, captures final
-  Docker stats, and exposes the separate restart probe. The benchmark-only
-  Unix socket provides deterministic eviction; no production HTTP route does.
+- Объектно-безопасный порт `Engine` использует boxed futures для
+  add/read/status/delete; `TorrentCoordinator` зависит от `Arc<dyn Engine>`.
+  Реестр librqbit меняется только после успешного удаления сессии.
+- Вытеснение отменяет и дожидается принадлежащей ему работы prefetch,
+  отказывает при живом закреплении воспроизведения до изменения
+  движка/кэша/SQLite, сохраняет адреса живых пиров для ленивого повторного
+  добавления и отбрасывает эти подсказки при обычном удалении. Освобождение
+  читателя и завершение prefetch сериализуют соблюдение мягкого лимита.
+  Структурированные события фиксируют причину, освобождённые/оставшиеся байты
+  и байты лимита, состояние закрепления, число подсказок пиров и время
+  повторного добавления.
+- Повторное добавление возвращает существующую запись каталога, не меняя
+  `added_at` и не повторяя добавление в движок. Runtime-поля `stat` и
+  `connected_seeders` берутся из статуса librqbit; R5 считает живые пиры.
+- Восстановление с диска сохраняет атомарные раскладки, экстенты и
+  проверенные куски. Новый движок может прочитать восстановленный диапазон без
+  пира; повреждённые или несовпадающие манифесты отбрасываются.
+- Клиент измерений ограничивает время curl и подпроцессов, атомарно
+  записывает частичное состояние, быстро падает на предусловиях и проверяет
+  каждый байт Range. Генерация и проверка фикстур используют один
+  детерминированный помощник полезной нагрузки. Netem применяется
+  существующим tooling-образом в сетевом namespace цели, так что `tc` не
+  попадает в production-образ.
+- `r1.sh` проверяет curl, всегда сообщает выходной каталог, снимает итоговую
+  статистику Docker и предоставляет отдельную пробу перезапуска.
+  Benchmark-only Unix-сокет обеспечивает детерминированное вытеснение;
+  production HTTP-маршрута для этого нет.
 
-## Discarded attempts
+## Отброшенные попытки
 
-- `/tmp/rustorr-baseline/20260921T124248Z` exposed the original prefetch-pin
-  race and is interrupted evidence, not a result.
-- `20260921T142018Z`, `20260921T142234Z`, `20260921T143456Z`, and
-  `20260921T143845Z` are incomplete magnet add/first-Range diagnostics. They
-  led to cancelling prefetch before lifecycle changes and to short-circuiting
-  repeated adds; none can close the gate.
-- `20260921T144417Z` reached netem but stopped on a missing `tc` binary in the
-  Rustorr image. The harness now uses a dedicated tooling container; this
-  attempt remains invalid.
-- `20260921T145202Z` and `20260921T145337Z` were complete pre-final-interface
-  runs, but their aggregate also failed netem (`1278.014 ms`) and they are
-  superseded by the boxed-status final image runs above.
-- `20260921T150358Z` exposed a foreground/prefetch priority race: the response
-  returned 206 headers but no body inside 30 seconds. Prefetch now waits 50 ms
-  after registration so the playback reader expresses demand first; a unit
-  test fixes that ordering and both final full runs pass cold Range.
-- `20260921T164452Z` did not begin measurement because the reference
-  TorrServer still owned host port 8090. Only the R1 target services were
-  removed, preserving the unrelated R2 proxy/TLS containers, before the two
-  valid candidate runs.
-- A 64 KiB `ReaderStream` experiment was tested with complete runs
-  `20260921T165840Z` and `20260921T170032Z`. Their netem p95 values were
-  `1161.103 ms` and `831.574 ms`: one still failed, while p50 regressed from
-  about `589 ms` to `661–662 ms`. The change was reverted and the aggregate
-  `/tmp/rustorr-baseline/r5-buffered-aggregate.json` is diagnostic only.
-- The R3 engine-spike timings are not substituted for HTTP parity evidence.
+- `/tmp/rustorr-baseline/20260921T124248Z` выявил исходную гонку
+  prefetch-закрепления и является прерванным доказательством, а не
+  результатом.
+- `20260921T142018Z`, `20260921T142234Z`, `20260921T143456Z` и
+  `20260921T143845Z` — неполные диагностики добавления magnet/первого Range.
+  Они привели к отмене prefetch перед изменениями жизненного цикла и к
+  короткому замыканию повторных добавлений; ни одна не может закрыть гейт.
+- `20260921T144417Z` дошёл до netem, но остановился из-за отсутствия бинарника
+  `tc` в образе Rustorr. Теперь стенд использует отдельный
+  tooling-контейнер; эта попытка остаётся недействительной.
+- `20260921T145202Z` и `20260921T145337Z` были полными прогонами до
+  финального интерфейса, но их агрегат тоже провалил netem (`1278.014 ms`), и
+  они заменены прогонами финального образа с boxed-status выше.
+- `20260921T150358Z` выявил гонку приоритетов foreground/prefetch: ответ
+  вернул заголовки 206, но без тела в течение 30 секунд. Теперь prefetch ждёт
+  50 ms после регистрации, чтобы читатель воспроизведения первым выразил
+  потребность; unit-тест закрепляет этот порядок, и оба финальных полных
+  прогона проходят холодный Range.
+- `20260921T164452Z` не начал замер, потому что эталонный TorrServer всё ещё
+  занимал порт хоста 8090. Перед двумя действительными прогонами кандидата
+  были удалены только целевые сервисы R1, а не связанные с этим контейнеры
+  прокси/TLS R2.
+- Эксперимент с `ReaderStream` на 64 KiB проверялся полными прогонами
+  `20260921T165840Z` и `20260921T170032Z`. Их значения netem p95 —
+  `1161.103 ms` и `831.574 ms`: один всё равно провалился, а p50 ухудшился
+  примерно с `589 ms` до `661–662 ms`. Изменение отменено, а агрегат
+  `/tmp/rustorr-baseline/r5-buffered-aggregate.json` — только диагностический.
+- Тайминги engine spike R3 не подменяют доказательства HTTP-паритета.
 
-## Working-tree provenance
+## Происхождение рабочего дерева
 
-- Branch: `r3-engine-spike`; base HEAD: `c0e42af`; the tree remains
-  intentionally uncommitted and unpushed.
-- New paths include `crates/rustorr-lifecycle/`,
+- Ветка: `r3-engine-spike`; базовый HEAD: `c0e42af`; дерево намеренно
+  остаётся незакоммиченным и незапушенным.
+- Новые пути включают `crates/rustorr-lifecycle/`,
   `docker-compose.r5-benchmark.yml`, `tools/baseline/fixture_payload.py`,
-  `tools/baseline/restart_probe.py`, and this handoff.
-- Raw benchmark and restart artifacts stay under `/tmp/rustorr-baseline/` and
-  are not committed.
+  `tools/baseline/restart_probe.py` и этот handoff.
+- Сырые артефакты бенчмарков и перезапуска остаются в
+  `/tmp/rustorr-baseline/` и не коммитятся.

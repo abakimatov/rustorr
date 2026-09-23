@@ -124,7 +124,7 @@ smoke() {
   done
   [ "${ready}" = 1 ] || { compose logs rustorr >&2; echo "error: Rustorr did not restart" >&2; return 1; }
   container=$(compose ps -q rustorr)
-  docker logs "${container}" 2>&1 | grep -F 'schema_version=1' >/dev/null || { docker logs "${container}" >&2; echo "error: restart did not open schema version 1" >&2; return 1; }
+  docker logs "${container}" 2>&1 | grep -F 'schema_version=2' >/dev/null || { docker logs "${container}" >&2; echo "error: restart did not open schema version 2" >&2; return 1; }
   docker stop --time 10 "${container}" >/dev/null
   [ "$(docker inspect --format '{{.State.ExitCode}}' "${container}")" = 0 ] || { docker logs "${container}" >&2; echo "error: restarted Rustorr did not exit cleanly" >&2; return 1; }
 }

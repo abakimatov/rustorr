@@ -1,0 +1,29 @@
+services:
+  rustorr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      tracker:
+        condition: service_started
+      seeder:
+        condition: service_started
+    environment:
+      RUSTORR_DATA_DIR: /data
+      RUSTORR_DISABLE_DHT: "true"
+      RUSTORR_LISTEN: 0.0.0.0:8090
+      # The reverse-proxy contract runs inside this isolated fixture subnet.
+      # Production defaults remain loopback-only in rustorr-server.
+      RUSTORR_TRUSTED_PROXIES: 127.0.0.0/8,::1/128,172.31.250.0/24
+    volumes:
+      - fixture-data:/fixtures:ro
+      - rustorr-r6-state:/data
+    # A fixed address well above the dynamic range: when the reference is
+    # recreated while Rustorr restarts, Docker must not hand Rustorr the
+    # reference's static 172.31.250.4.
+    networks:
+      baseline:
+        ipv4_address: 172.31.250.20
+
+volumes:
+  rustorr-r6-state:

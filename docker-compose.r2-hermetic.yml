@@ -1,0 +1,32 @@
+services:
+  tracker:
+    networks:
+      baseline:
+        ipv4_address: 172.31.250.2
+
+  seeder:
+    networks:
+      baseline:
+        ipv4_address: 172.31.250.3
+
+  torrserver:
+    # MatriX.145 installs a custom DNS dialer. Pinning the two fixture names
+    # in /etc/hosts keeps local tracker/peer discovery working while public
+    # DNS and public-IP discovery remain unavailable.
+    extra_hosts:
+      - "tracker:172.31.250.2"
+      - "seeder:172.31.250.3"
+    networks:
+      baseline:
+        ipv4_address: 172.31.250.4
+
+networks:
+  baseline:
+    # Contract fixtures must not discover a public address: the pinned
+    # TorrServer then rejects RFC1918 peers returned by the local tracker as
+    # inconsistent with that address. The normal R1 benchmark network remains
+    # unchanged; only tools/r2.sh applies this overlay.
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24

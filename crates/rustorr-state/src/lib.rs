@@ -12,8 +12,10 @@ mod settings;
 mod state;
 mod values;
 mod viewed;
+mod waf;
 
 pub use catalog::CatalogEntry;
 pub use error::Error;
 pub use state::State;
 pub use viewed::ViewedEntry;
+pub use waf::WafLists;

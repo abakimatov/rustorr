@@ -1,12 +1,12 @@
-# R4 continuation state
+# Состояние продолжения R4
 
-Updated: `2026-09-21`
+Обновлено: `2026-09-21`
 
 Это точка входа для продолжения R4 в новой сессии. План этапа и журнал шагов
 1–7 — в [`r4-plan.md`](r4-plan.md); здесь состояние, команды, ловушки и точный
 следующий шаг.
 
-## Current status
+## Текущий статус
 
 R4 `done`: **шаги 1–9 выполнены**. `tools/r4.sh check` зелёный (165 тестов),
 `tools/r4.sh cross-build` подтвердил `x86_64`, а `tools/r4.sh smoke` собрал
@@ -23,7 +23,7 @@ R4 `done`: **шаги 1–9 выполнены**. `tools/r4.sh check` зелён
 он сам не попросит; тогда же он выберет ветку (текущая называется
 `r3-engine-spike`).
 
-## Read first
+## Прочитать сначала
 
 1. [`r4-plan.md`](r4-plan.md) — цели, стек, границы crates, шаги и журнал
    выполнения с доказательствами и найденными ошибками.
@@ -33,7 +33,7 @@ R4 `done`: **шаги 1–9 выполнены**. `tools/r4.sh check` зелён
 3. [`implementation-plan.md`](implementation-plan.md) — handoff
    `2026-09-21 — R4 steps 1–7`.
 
-## How to work
+## Как работать
 
 На хосте нет `cargo`. Всё идёт через Docker; образ `rustorr-r4-dev`
 (`tools/r4/Dockerfile.dev`), тома `rustorr-r4-target` и `rustorr-r4-cargo`.
@@ -52,7 +52,7 @@ tools/r4.sh clean         # удалить тома с target и кэшем carg
 тесты: cache 52, domain 20, engine 25, http 12, state 36, server 11 модульных и
 9 процессных.
 
-## Repository map
+## Карта репозитория
 
 | Путь | Что там |
 | --- | --- |
@@ -72,7 +72,7 @@ tools/r4.sh clean         # удалить тома с target и кэшем carg
 `RUSTORR_CACHE_SIZE`, `RUSTORR_PEER_PORT`, `RUSTORR_DISABLE_DHT`,
 `RUSTORR_DISABLE_TRACKERS`, `RUSTORR_SHUTDOWN_GRACE`, `RUSTORR_LOG_FORMAT`.
 
-## Pitfalls
+## Подводные камни
 
 Каждая из них стоила времени в шагах 1–7.
 
@@ -103,7 +103,7 @@ tools/r4.sh clean         # удалить тома с target и кэшем carg
   эталонный корпус `/tmp/rustorr-contract/20260920T144518Z/reference.json`,
   результаты R1 и R3. Если нужны, воспроизводятся командами R1–R3.
 
-## Historical step 8 plan (completed)
+## Исторический план шага 8 (выполнен)
 
 ### Шаг 8 — Docker и smoke
 
@@ -145,7 +145,7 @@ tools/r4.sh clean         # удалить тома с target и кэшем carg
    (быстрый `cargo build --target x86_64-unknown-linux-gnu` в контейнере с
    кросс-тулчейном), чтобы риск не всплыл в конце.
 
-### Шаг 9 — документы (completed)
+### Шаг 9 — документы (выполнен)
 
 - **ADR 0005** — границы crates и изоляция движка: таблица допустимых рёбер и
   её автоматическая проверка, `PieceStore` как шов на стороне Rustorr,
@@ -158,7 +158,7 @@ tools/r4.sh clean         # удалить тома с target и кэшем carg
 - Обновить `implementation-plan.md` (R4 → `done`, handoff),
   `r3-continuation.md` и этот файл; проверить критерии выхода в `r4-plan.md`.
 
-## Carried forward
+## Перенесено дальше
 
 **R5 — жизненный цикл и кэш**
 - Подключить `CacheStorageFactory` к сессии (`LibrqbitEngine::start`).
@@ -193,7 +193,7 @@ tools/r4.sh clean         # удалить тома с target и кэшем carg
 - Фильтрация логов librqbit; флаги совместимости с CLI TorrServer;
   соотношение `--shutdown-grace` и таймаута `docker stop`.
 
-## Decisions taken by the user
+## Решения, принятые пользователем
 
 Решено 2026-09-21, повторно не спрашивать:
 
@@ -208,7 +208,7 @@ tools/r4.sh clean         # удалить тома с target и кэшем carg
 
 Открытых вопросов к пользователю нет.
 
-R4 закрыт. Точка входа продолжения — R5 из раздела **Carried forward**:
+R4 закрыт. Точка входа продолжения — R5 из раздела **Перенесено дальше**:
 подключить `CacheStorageFactory` к сессии, добавить lifecycle coordinator и
 измерить R1 через Rustorr HTTP. Перед началом перечитать
 [`r4-architecture.md`](r4-architecture.md) и ADR 0004–0006.

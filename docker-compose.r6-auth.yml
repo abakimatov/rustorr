@@ -1,0 +1,12 @@
+services:
+  torrserver:
+    # MatriX.145 has no environment switch for auth; only the CLI flag works.
+    command: ["-d", "/config", "-p", "8090", "--httpauth"]
+    volumes:
+      - ./tools/contract/accs.db:/config/accs.db:ro
+
+  rustorr:
+    environment:
+      RUSTORR_HTTP_AUTH: "true"
+    volumes:
+      - ./tools/contract/accs.db:/data/accs.db:ro

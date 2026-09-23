@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io,
     io::Write,
@@ -17,9 +17,9 @@ const MANIFEST: &str = ".rustorr-cache-v1";
 /// SSD-backed store: one sparse file per torrent file under
 /// `<root>/<info hash>/<file index>`, using positioned IO (Unix only).
 ///
-/// Written ranges are tracked in memory only. After a restart the files left
-/// on disk are unusable and `open` clears them; keeping the cache across
-/// restarts is R5 work.
+/// Written ranges are tracked in memory and in a per-torrent manifest. After a
+/// restart `open` recovers only what a valid manifest proves, and
+/// `discard_except` removes storage of torrents nobody owns any more.
 pub struct DiskStore {
     root: PathBuf,
     torrents: RwLock<HashMap<InfoHash, Arc<Mutex<Torrent>>>>,
@@ -205,6 +205,28 @@ fn write_manifest(torrent: &Torrent) -> Result<(), Error> {
 }
 
 impl PieceStore for DiskStore {
+    fn discard_except(&self, keep: &HashSet<InfoHash>) -> Result<(), Error> {
+        let entries = match fs::read_dir(&self.root) {
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+            entries => entries.map_err(io_error("list cache directory"))?,
+        };
+        let open = self.torrents.read().unwrap_or_else(PoisonError::into_inner);
+        for entry in entries {
+            let entry = entry.map_err(io_error("list cache directory"))?;
+            let Some(torrent) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<InfoHash>().ok())
+            else {
+                continue;
+            };
+            if !keep.contains(&torrent) && !open.contains_key(&torrent) {
+                remove_dir(&entry.path())?;
+            }
+        }
+        Ok(())
+    }
+
     fn open(&self, torrent: InfoHash, layout: &TorrentLayout) -> Result<Recovered, Error> {
         let dir = self.root.join(torrent.to_string());
         // A second explicit open in the same process means the caller asked
@@ -438,6 +460,33 @@ mod tests {
             recovered.read(torrent_id, file(0), 0, &mut [0; 1]),
             Err(Error::Missing { .. })
         ));
+    }
+
+    #[test]
+    fn storage_left_by_a_previous_process_is_discarded_unless_kept() {
+        let (_, dir) = store();
+        let root = dir.path().join("cache");
+        {
+            let store = DiskStore::new(&root);
+            for id in [1, 2] {
+                store.open(torrent(id), &layout()).unwrap();
+                store.write(torrent(id), file(0), 0, b"old").unwrap();
+            }
+        }
+        fs::create_dir_all(root.join("not-a-torrent")).unwrap();
+
+        let restarted = DiskStore::new(&root);
+        restarted
+            .discard_except(&HashSet::from([torrent(1)]))
+            .unwrap();
+
+        assert!(root.join(torrent(1).to_string()).exists());
+        assert!(!root.join(torrent(2).to_string()).exists());
+        assert!(root.join("not-a-torrent").exists());
+        assert_eq!(
+            restarted.open(torrent(1), &layout()).unwrap().stored_bytes,
+            3
+        );
     }
 
     #[test]

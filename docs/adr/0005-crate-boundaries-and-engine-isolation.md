@@ -2,38 +2,40 @@
 status: accepted
 ---
 
-# Keep the BitTorrent engine behind a mechanically checked crate boundary
+# BitTorrent-движок остаётся за механически проверяемой границей crate
 
-## Context
+## Контекст
 
-Rustorr needs the engine, cache, persistent state and HTTP surface to evolve
-at different speeds without importing `librqbit` types into client-facing
-code. ADR 0003 requires that isolation; ADR 0004 requires a Rustorr-owned
-storage seam for cache eviction.
+Движок, кэш, постоянное состояние и HTTP-поверхность Rustorr должны
+развиваться с разной скоростью, не протаскивая типы `librqbit` в клиентский
+код. ADR 0003 требует этой изоляции; ADR 0004 требует принадлежащего Rustorr
+seam хранилища для вытеснения кэша.
 
-## Decision
+## Решение
 
-- `rustorr-domain` contains IO-free identifiers, ranges and errors.
-- Only `rustorr-engine` has direct dependencies on `librqbit` and
-  `librqbit-core`. Its public port is expressed in Rustorr domain types.
-- `rustorr-cache` owns `PieceStore`, residency, pins and torrent-scoped LRU.
-  `rustorr-engine` adapts librqbit's storage traits to that port; cache never
-  imports engine or librqbit.
-- `rustorr-state` owns SQLite state; `rustorr-http` maps crate errors to HTTP;
-  `rustorr-server` is the sole composition root for concrete implementations.
-- `tools/r4/check-boundaries.py`, run by `tools/r4.sh check`, rejects an
-  unapproved workspace edge and any direct librqbit dependency outside engine.
+- `rustorr-domain` содержит свободные от IO идентификаторы, диапазоны и ошибки.
+- Прямые зависимости от `librqbit` и `librqbit-core` есть только у
+  `rustorr-engine`. Его публичный порт выражен в доменных типах Rustorr.
+- `rustorr-cache` владеет `PieceStore`, резидентностью, закреплениями и LRU на
+  уровне торрента. `rustorr-engine` адаптирует трейты хранилища librqbit к
+  этому порту; кэш никогда не импортирует движок или librqbit.
+- `rustorr-state` владеет состоянием в SQLite; `rustorr-http` отображает ошибки
+  crate в HTTP; `rustorr-server` — единственный composition root для
+  конкретных реализаций.
+- `tools/r4/check-boundaries.py`, запускаемый `tools/r4.sh check`, отклоняет
+  неутверждённое ребро в workspace и любую прямую зависимость от librqbit вне
+  движка.
 
-## Consequences
+## Последствия
 
-The checked graph prevents accidental engine leakage and makes an engine swap
-local to one crate. The cache's soft cap remains deliberately soft: a pinned
-torrent cannot be evicted. R5 coordinates `Session::delete` before
-`Cache::remove`; piece-level eviction stays forbidden by ADR 0004.
+Проверяемый граф не даёт движку случайно протечь и делает замену движка
+локальной для одного crate. Мягкий лимит кэша намеренно остаётся мягким:
+закреплённый торрент нельзя вытеснить. R5 выполняет `Session::delete` перед
+`Cache::remove`; вытеснение на уровне кусков по-прежнему запрещено ADR 0004.
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- Expose librqbit types from HTTP or cache: rejected, as it violates ADR 0003
-  and makes a future engine replacement cross-cutting.
-- Let the engine own storage and eviction: rejected, because it cannot safely
-  invalidate a live piece in librqbit 9.0.1.
+- Открыть типы librqbit из HTTP или кэша: отклонено, так как нарушает ADR 0003
+  и делает будущую замену движка сквозным изменением.
+- Отдать движку владение хранилищем и вытеснением: отклонено, потому что в
+  librqbit 9.0.1 он не может безопасно инвалидировать живой кусок.

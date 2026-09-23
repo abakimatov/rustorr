@@ -151,13 +151,30 @@ def wait_for_torrent(base: str, expected_hash: str, timeout_s: int = 90) -> dict
     return {"ok": False, "metadata_discovery_ms": (time.monotonic() - started) * 1000, "last": last}
 
 
-def prepare(base: str, link: str, expected_hash: str, input_kind: str = "torrent") -> list[dict]:
+def prepare(
+    base: str,
+    link: str,
+    expected_hash: str,
+    input_kind: str = "torrent",
+    save_to_db: bool = False,
+) -> list[dict]:
     events = [{"scenario": "prepare-wipe", **post_json(base, "/torrents", {"action": "wipe"})}]
     if not events[-1].get("ok"):
         return events
     add_link = link if input_kind == "torrent" else f"magnet:?xt=urn:btih:{expected_hash}&dn=single&tr={urllib.parse.quote('http://tracker:6969/announce', safe='')}"
     add_timeout = 90 if input_kind == "magnet" else 30
-    events.append({"scenario": "prepare-add", "input": input_kind, **post_json(base, "/torrents", {"action": "add", "link": add_link}, timeout=add_timeout)})
+    events.append(
+        {
+            "scenario": "prepare-add",
+            "input": input_kind,
+            **post_json(
+                base,
+                "/torrents",
+                {"action": "add", "link": add_link, "save_to_db": save_to_db},
+                timeout=add_timeout,
+            ),
+        }
+    )
     if not events[-1].get("ok"):
         return events
     metadata = wait_for_torrent(base, expected_hash)

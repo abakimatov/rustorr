@@ -39,7 +39,7 @@ services:
         - CMD-SHELL
         - >-
           test "$(transmission-remote 127.0.0.1:9091 --list 2>/dev/null |
-          grep -c '100%')" -eq 2
+          grep -c '100%')" -eq 3
       interval: 1s
       timeout: 2s
       retries: 30
@@ -58,6 +58,12 @@ services:
     environment:
       TS_PORT: "8090"
       TS_PATH: /config
+      # Keep the black-box fixture hermetic. If public-IP discovery succeeds,
+      # anacrolix may reject the RFC1918 peer returned by the local tracker as
+      # inconsistent with the advertised public address.
+      HTTP_PROXY: http://127.0.0.1:9
+      HTTPS_PROXY: http://127.0.0.1:9
+      NO_PROXY: tracker,seeder,127.0.0.1,localhost
     ports:
       - "127.0.0.1:8090:8090"
     volumes:

@@ -1,10 +1,10 @@
-# R3 continuation state
+# Состояние продолжения R3
 
-Updated: `2026-09-21`
+Обновлено: `2026-09-21`
 
 Это точка входа для продолжения после R3 в новой сессии.
 
-## Current status
+## Текущий статус
 
 R3 закрыт. Все три оставшихся gate пройдены, и
 [ADR 0003](adr/0003-bittorrent-engine-selection.md) теперь `accepted`:
@@ -14,7 +14,7 @@ HTTP routes и production cache ещё не реализованы — это р
 Начальная точка: ветка `master`, `HEAD b816f5a`. В рабочем дереве есть
 незакоммиченные R1–R3 изменения; коммит не создавался.
 
-## What closed in this session
+## Что закрыто в этой сессии
 
 - **Peer exchange.** `tools/engine-spike/run.sh pex` поднимает трёхузловую
   топологию: seeder → `pex-middle` (знает tracker) → `pex-client`
@@ -42,7 +42,7 @@ HTTP routes и production cache ещё не реализованы — это р
   показывал полное время прогона; исправлено, добавлены `total_ms` и
   `warmup_read`.
 
-## Read first
+## Прочитать сначала
 
 - [`docs/adr/0003-bittorrent-engine-selection.md`](adr/0003-bittorrent-engine-selection.md)
   — решение `adopt` и пять условий, на которых оно принято.
@@ -54,7 +54,7 @@ HTTP routes и production cache ещё не реализованы — это р
 - [`docs/implementation-plan.md`](implementation-plan.md) — общий план и
   append-only handoff history.
 
-## Raw artifacts
+## Сырые артефакты
 
 Вне репозитория, в `/tmp/rustorr-engine-spike/`:
 
@@ -70,16 +70,16 @@ HTTP routes и production cache ещё не реализованы — это р
 Отброшенные и невалидные прогоны перечислены в
 [`engine-spike.md`](engine-spike.md); переиспользовать их нельзя.
 
-## Checks passing
+## Проходящие проверки
 
-- Docker release build `rustorr-engine-spike`;
+- release-сборка `rustorr-engine-spike` в Docker;
 - `cargo fmt --check`;
 - `cargo clippy --locked --release -- -D warnings`;
-- Docker Compose config validation (baseline + r3-engine);
+- валидация конфигурации Docker Compose (baseline + r3-engine);
 - `sh -n tools/engine-spike/run.sh`;
 - `git diff --check`.
 
-## Carried into R4 — не закрыто в R3
+## Перенесено в R4 — не закрыто в R3
 
 - Никаких HTTP Range или player-измерений для кандидата не существует; R1
   floors остаются непокрытыми.
@@ -90,7 +90,7 @@ HTTP routes и production cache ещё не реализованы — это р
 - Piece-level eviction невозможен без upstream-изменения — это единственный
   названный fork trigger.
 
-## Exact next steps
+## Точные следующие шаги
 
 R3 и R4 закрыты. Следующий этап — R5: lifecycle/cache coordinator и прогон
 `tools/baseline/r1.sh` против Rustorr. Актуальная точка входа —

@@ -2,109 +2,111 @@
 status: accepted
 ---
 
-# Adopt librqbit 9.0.1 as the Rustorr BitTorrent engine, behind an adapter
+# librqbit 9.0.1 принимается BitTorrent-движком Rustorr за адаптером
 
-Decision: **adopt**, pinned at `librqbit = 9.0.1`, used only through Rustorr's
-own engine adapter, with one named fork trigger and two carried performance
-questions.
+Решение: **adopt** — принять с фиксацией `librqbit = 9.0.1`, использовать только
+через собственный адаптер движка Rustorr, с одним названным триггером форка и
+двумя перенесёнными вопросами производительности.
 
-## Context
+## Контекст
 
-Rustorr isolated the BitTorrent implementation behind an engine-adapter spike
-(`tools/engine-spike/`) before creating the production workspace. This ADR was
-held at `proposed` until the R3 gates closed. All of them are now addressed:
-capability evidence, a peer-exchange probe, a cache-eviction seam, and an
-explicit rule for comparing engine measurements to the R1 floors.
+До создания production workspace Rustorr изолировал реализацию BitTorrent за
+spike-адаптером движка (`tools/engine-spike/`). Этот ADR оставался в статусе
+`proposed`, пока не закрылись гейты R3. Теперь закрыты все: доказательства
+возможностей, проба peer exchange, seam вытеснения кэша и явное правило
+сравнения замеров движка с порогами R1.
 
-The spike does not implement Rustorr HTTP routes, the production cache, or
-player integration. Adoption applies to the engine choice only.
+Spike не реализует HTTP-маршруты Rustorr, production-кэш и интеграцию с
+плеерами. Принятие относится только к выбору движка.
 
-## Evidence behind the decision
+## Доказательства решения
 
-All runs are bounded, Dockerised against the R1 tracker and seeder, with raw
-artifacts under `/tmp/rustorr-engine-spike/` (intentionally not committed).
-Details are in [`engine-spike.md`](../engine-spike.md).
+Все прогоны ограничены по времени, запускаются в Docker против трекера и сидера
+R1, сырые артефакты лежат в `/tmp/rustorr-engine-spike/` (намеренно не
+коммитятся). Подробности — в [`engine-spike.md`](../engine-spike.md).
 
-**Streaming functionality.** Metadata and file mapping, positional reads,
-seek, cancellation, three concurrent views in one session, magnet metadata
-resolution, custom `StorageFactory` callbacks, session delete/re-add/re-fetch,
-and same-output persistence fast-resume all pass with matching SHA-256
-digests.
+**Функциональность стриминга.** Метаданные и отображение файлов, позиционное
+чтение, перемотка, отмена, три одновременных просмотра в одной сессии,
+получение метаданных по magnet, пользовательские колбэки `StorageFactory`,
+удаление/повторное добавление/повторная загрузка в сессии и fast-resume с
+сохранением в тот же каталог проходят с совпадающими дайджестами SHA-256.
 
-**Transport capabilities.** DHT bootstrap discovery reached
-`routing_table_size=58` against an isolated bootstrap node
-(`dht-two-peer-20260921T172000Z/client.json`). A uTP-only probe completed a
-correct read with `live_utp=1`, `live_tcp=0`
+**Транспортные возможности.** Обнаружение через DHT bootstrap достигло
+`routing_table_size=58` против изолированного bootstrap-узла
+(`dht-two-peer-20260921T172000Z/client.json`). Проба только с uTP завершила
+корректное чтение с `live_utp=1`, `live_tcp=0`
 (`20260920T171757Z/probe.json`).
 
-**Peer exchange (the gate that was open).** The two-peer harness
-(`tools/engine-spike/run.sh pex`) puts a tracker-connected middle peer between
-the seeder and a client that has trackers and DHT disabled at session level,
-LSD disabled, and exactly one initial peer — the middle. In both runs
-(`pex-20260920T175048Z`, `pex-20260920T175326Z`) the client discovered three
-addresses it was never given and fetched `8,126,464` bytes / 31 pieces from
-the PEX-discovered Transmission seeder at `172.18.0.3:6881`, against only
-`262,144` bytes from its initial peer, returning the expected digest
+**Peer exchange (гейт, который оставался открытым).** Двухпировый стенд
+(`tools/engine-spike/run.sh pex`) ставит подключённый к трекеру промежуточный
+пир между сидером и клиентом, у которого на уровне сессии отключены трекеры и
+DHT, отключён LSD и есть ровно один начальный пир — промежуточный. В обоих
+прогонах (`pex-20260920T175048Z`, `pex-20260920T175326Z`) клиент обнаружил три
+адреса, которые ему никогда не передавались, и загрузил `8,126,464` байт /
+31 кусок с найденного через PEX сидера Transmission на `172.18.0.3:6881`,
+против всего `262,144` байт от начального пира, вернув ожидаемый дайджест
 `210ba6b19ee6a72f875261cd3a41d030fad18470c0fc633ee61b1a7d84174795`.
-A negative control with the same isolation and no initial peer
-(`pex-control-20260920T174652Z`) found no peers at all and failed on the
-initialization deadline, which is what makes the discovery attributable to
-peer exchange.
+Отрицательный контроль с той же изоляцией и без начального пира
+(`pex-control-20260920T174652Z`) не нашёл ни одного пира и упал по дедлайну
+инициализации — именно это позволяет приписать обнаружение peer exchange.
 
-**Cache eviction.** Covered by [ADR 0004](0004-cache-eviction-seam.md).
-Torrent-scoped eviction via delete and re-add works; evicting data underneath
-a live torrent makes the engine silently serve the removed bytes, so Rustorr
-owns the cache at the storage seam and evicts at torrent granularity.
+**Вытеснение кэша.** Описано в [ADR 0004](0004-cache-eviction-seam.md).
+Вытеснение на уровне торрента через удаление и повторное добавление работает;
+удаление данных из-под живого торрента заставляет движок молча отдавать
+удалённые байты, поэтому Rustorr владеет кэшем на seam хранилища и вытесняет
+с гранулярностью торрента.
 
-**Performance.** Engine timings are repeatability evidence, never parity
-evidence; the rule and the per-scenario comparison are in
-[`engine-r1-metric-mapping.md`](../engine-r1-metric-mapping.md). Under R1's own
-seek and magnet protocols the engine is well inside every comparable floor. A
-defect in the spike's own `initialized_ms` field, which measured total run
-time, was found and fixed while doing that comparison.
+**Производительность.** Тайминги движка — доказательство повторяемости, но
+никогда не доказательство паритета; правило и сравнение по сценариям — в
+[`engine-r1-metric-mapping.md`](../engine-r1-metric-mapping.md). По
+собственным протоколам R1 для перемотки и magnet движок уверенно укладывается
+во все сопоставимые пороги. В ходе этого сравнения был найден и исправлен
+дефект собственного поля spike `initialized_ms`, которое измеряло общее время
+прогона.
 
-**R5 HTTP follow-up.** Two complete Rustorr runs
-(`20260921T150704Z`, `20260921T150836Z`) put the production adapter, cache and
-HTTP Range path around the engine with zero request or integrity errors. The
-magnet first-Range p95 is `5555.989 ms`; deterministic torrent eviction and
-re-add is bounded at `9075.955 ms`. Neither metric has a parity floor, but the
-earlier roughly 20-second observations did not reproduce. The fork trigger is
-therefore not activated by R5 evidence. R5 was closed by explicit product
-decision with its unrelated netem latency deviation recorded, not treated as a
-passing performance gate; see [`r5-continuation.md`](../r5-continuation.md).
+**Продолжение в R5 через HTTP.** Два полных прогона Rustorr
+(`20260921T150704Z`, `20260921T150836Z`) обернули движок production-адаптером,
+кэшем и HTTP Range-путём без ошибок запросов и целостности. p95 первого Range
+для magnet — `5555.989 ms`; детерминированное вытеснение торрента и повторное
+добавление ограничены `9075.955 ms`. Ни у одной метрики нет порога паритета, но
+прежние наблюдения порядка 20 секунд не воспроизвелись. Поэтому доказательства
+R5 не активируют триггер форка. R5 закрыт явным продуктовым решением с
+зафиксированным отклонением netem-латентности, не связанным с этим, и не
+считается пройденным гейтом производительности; см.
+[`r5-continuation.md`](../r5-continuation.md).
 
-## Why adopt rather than fork or reject
+## Почему adopt, а не форк или отказ
 
-Every capability Rustorr needs for R4 is present and evidenced in the pinned
-release, through public APIs, without patching. No blocking defect was found.
-Forking now would take on standing maintenance cost with no measurement
-justifying it, and rejecting would discard a candidate that passed every
-functional gate.
+Все возможности, нужные Rustorr для R4, присутствуют и подтверждены в
+зафиксированном релизе через публичные API, без патчей. Блокирующих дефектов не
+найдено. Форк сейчас означал бы постоянные затраты на сопровождение без
+оправдывающих их замеров, а отказ выбросил бы кандидата, прошедшего все
+функциональные гейты.
 
-## Conditions attached to this decision
+## Условия решения
 
-1. **Adapter isolation is mandatory.** Engine types do not appear in Rustorr's
-   HTTP, cache or player layers. The spike's shape — a narrow adapter over
-   `Session`, `ManagedTorrent` and `TorrentStorage` — is the production shape.
-2. **The fork trigger is piece invalidation.** If R5/R11 measurement shows
-   torrent-scoped eviction is too coarse, the remedy is an upstream change
-   exposing piece invalidation. That is the single named condition that turns
-   `adopt` into `fork`.
-3. **Session-level options must be set explicitly.** `9.0.1` accepts
-   `AddTorrentOptions::disable_trackers` but never reads it; only
-   `SessionOptions::disable_trackers` clears the tracker list. The first PEX
-   run was invalidated by exactly this, and was only caught by the negative
-   control. The adapter must assert its isolation settings rather than trust
-   per-torrent options, and this is worth reporting upstream.
-4. **Two performance questions are carried into R4**, not closed here: the
-   first read after a magnet resolution (`20597.9 ms`) and the torrent-scoped
-   re-fetch (`~20.1 s`), which are close enough to suggest a shared cause in
-   peer re-acquisition. Neither has an R1 floor. Seek and magnet metadata were
-   re-measured under R1's own protocol and came in at `500.2 / 505.2 ms`
-   against a `4512.8 ms` floor and `2855.9 ms` against a `6058.5 ms` floor, so
-   the earlier "slower than TorrServer" reading was a measurement artefact,
-   not a property of the engine. Parity is still only declarable through the
-   Rustorr HTTP surface.
-5. **The version stays pinned.** `librqbit = 9.0.1` with the committed
-   `Cargo.lock`; upgrades are a deliberate change with a re-run of the spike
-   gates.
+1. **Изоляция за адаптером обязательна.** Типы движка не появляются в HTTP-,
+   кэш- и плеерных слоях Rustorr. Форма spike — узкий адаптер над `Session`,
+   `ManagedTorrent` и `TorrentStorage` — и есть production-форма.
+2. **Триггер форка — инвалидация кусков.** Если замеры R5/R11 покажут, что
+   вытеснение на уровне торрента слишком грубое, решение — upstream-изменение,
+   открывающее инвалидацию кусков. Это единственное названное условие,
+   превращающее `adopt` в `fork`.
+3. **Опции уровня сессии задаются явно.** `9.0.1` принимает
+   `AddTorrentOptions::disable_trackers`, но никогда его не читает; список
+   трекеров очищает только `SessionOptions::disable_trackers`. Первый прогон
+   PEX был признан недействительным именно из-за этого и был пойман только
+   отрицательным контролем. Адаптер должен проверять свои настройки изоляции, а
+   не доверять опциям отдельного торрента; об этом стоит сообщить upstream.
+4. **Два вопроса производительности переносятся в R4**, а не закрываются здесь:
+   первое чтение после получения magnet (`20597.9 ms`) и повторная загрузка на
+   уровне торрента (`~20.1 s`), достаточно близкие, чтобы предполагать общую
+   причину в повторном поиске пиров. Ни у одной нет порога R1. Перемотка и
+   метаданные magnet были перемерены по собственному протоколу R1 и дали
+   `500.2 / 505.2 ms` против порога `4512.8 ms` и `2855.9 ms` против порога
+   `6058.5 ms`, так что прежний вывод «медленнее TorrServer» был артефактом
+   измерения, а не свойством движка. Паритет по-прежнему можно заявлять только
+   через HTTP-поверхность Rustorr.
+5. **Версия остаётся зафиксированной.** `librqbit = 9.0.1` с закоммиченным
+   `Cargo.lock`; обновление — осознанное изменение с повторным прогоном гейтов
+   spike.

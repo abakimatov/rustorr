@@ -1,19 +1,27 @@
-# R2 compatibility matrix
+# Матрица совместимости R6
 
-Reference: TorrServer MatriX.145 at `2c7fa43b9ac64a9eda27314c0b6791518497f188`.
+Эталон: TorrServer MatriX.145 на `2c7fa43b9ac64a9eda27314c0b6791518497f188`.
 
-| Area | Classification | Contract | Probe status |
+| Область | Классификация | Контракт | Статус пробы |
 | --- | --- | --- | --- |
-| JSON API | required | actions, fields, types, empty arrays, nulls, errors and HTTP status | manifest |
-| Streaming | required | GET/HEAD, Range, ETag, conditional requests, MIME and body bytes | manifest |
-| Playlists | required | M3U URLs, ordering, filenames and external-player directives | manifest |
-| Access | required | BasicAuth, CORS, WAF and forwarded host/proto behavior | manifest |
-| Cache/viewed | required | state changes and HEAD side effects | manifest |
-| Search/media | capability-specific | search, storage, TMDB, GStreamer and ffprobe | manifest |
-| MCP | capability-specific | initialize response and protocol errors | manifest |
-| DLNA/discovery | capability-specific | DLNA HTTP probe and Bonjour service | manifest; Bonjour remains external probe |
-| WebDAV/FUSE | capability-specific | WebDAV OPTIONS and FUSE route availability | manifest |
+| Торренты/загрузка | required | все действия, побочные эффекты live/каталога, кодеки ссылок и multipart-загрузка | manifest |
+| Настройки | required | 41 поле, значения по умолчанию, нормализация, сохранение и объявленные runtime-эффекты | manifest |
+| Стриминг | required | GET/HEAD, Range, ETag, условные запросы, MIME и байты тела | manifest |
+| Плейлисты | required | URL в M3U, порядок, имена файлов и директивы внешних плееров | manifest |
+| Доступ | required | BasicAuth, CORS, WAF и поведение forwarded host/proto | manifest |
+| Кэш/просмотренное | required | изменения состояния и побочные эффекты HEAD | manifest |
+| Поиск/медиа | capability-specific | поиск, хранилище, TMDB, GStreamer и ffprobe | manifest |
+| MCP | capability-specific | ответ initialize и ошибки протокола | manifest |
+| DLNA/обнаружение | capability-specific | HTTP-проба DLNA и сервис Bonjour | manifest; Bonjour остаётся внешней пробой |
+| WebDAV/FUSE | capability-specific | WebDAV OPTIONS и доступность маршрутов FUSE | manifest |
+| Сервис/TLS | capability-specific | встроенный TLS, редиректы, маршруты service/install и устаревшие алиасы | allowlist R9 |
 
-`manifest` means the request is represented in `scenarios.json`; runtime status
-is recorded only by a corpus capture. A `404` from a capability-specific
-endpoint remains evidence and is not silently filtered from the corpus.
+`manifest` означает, что запрос представлен в `scenarios.json`; runtime-статус
+фиксируется только снимком корпуса. `404` от capability-specific эндпоинта
+остаётся доказательством и не отфильтровывается из корпуса молча.
+
+Для R6 `required` означает core-сценарий: различие в ответе проваливает
+семантический diff. Различия capability-specific принимаются, только если их
+сценарий есть в `deferred-routes.json` с владельцем, причиной и этапом
+продолжения. Allowlist точный: объявленное ожидаемое различие, которое не
+возникло, тоже проваливает diff.

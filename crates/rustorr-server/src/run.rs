@@ -6,8 +6,8 @@ use std::{future::Future, io, pin::Pin, sync::Arc, time::Duration};
 use anyhow::{Context, bail};
 use rustorr_cache::{Cache, CacheConfig, DiskStore, MemoryStore, PieceStore};
 use rustorr_engine::{Engine, EngineConfig, LibrqbitEngine};
-use rustorr_http::ServerInfo;
-use rustorr_lifecycle::TorrentCoordinator;
+use rustorr_http::{Credentials, HttpConfig, ServerInfo};
+use rustorr_lifecycle::{ClientCore, TorrentCoordinator};
 use rustorr_state::State;
 use tokio::{
     net::TcpListener,
@@ -21,6 +21,15 @@ use crate::config::{CacheMode, Config};
 pub async fn run(config: Config) -> anyhow::Result<()> {
     // Installed first so a signal that arrives during startup is not lost.
     let mut signals = Signals::install().context("cannot install signal handlers")?;
+
+    let http = HttpConfig {
+        credentials: config
+            .http_auth
+            .then(|| Credentials::read(&config.data_dir.join("accs.db")))
+            .transpose()
+            .map_err(anyhow::Error::msg)?,
+        trusted_proxies: config.trusted_proxies.clone(),
+    };
 
     let listener = TcpListener::bind(config.listen)
         .await
@@ -81,8 +90,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         "listening"
     );
 
+    let core: Arc<dyn ClientCore> = torrents;
     let outcome =
-        serve_until_signalled(listener, &mut signals, config.shutdown_grace, torrents).await;
+        serve_until_signalled(listener, &mut signals, config.shutdown_grace, core, http).await;
 
     // Reverse order of startup, whatever ended the server.
     engine.shutdown().await;
@@ -166,7 +176,8 @@ async fn serve_until_signalled(
     listener: TcpListener,
     signals: &mut Signals,
     grace: Duration,
-    torrents: Arc<TorrentCoordinator>,
+    core: Arc<dyn ClientCore>,
+    http: HttpConfig,
 ) -> anyhow::Result<()> {
     let (stop, stopped) = oneshot::channel::<()>();
     let info = ServerInfo {
@@ -175,7 +186,7 @@ async fn serve_until_signalled(
         // of Rustorr's package version.
         version: "MatriX.145".into(),
     };
-    let server = rustorr_http::serve_with_lifecycle(listener, info, torrents, async move {
+    let server = rustorr_http::serve_with_core(listener, info, core, http, async move {
         let _ = stopped.await;
     });
     tokio::pin!(server);

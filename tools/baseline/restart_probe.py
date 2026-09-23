@@ -53,7 +53,12 @@ def main() -> None:
     }
     atomic_write(args.output, result)
     try:
-        prepared = prepare(args.base_url, args.known_link, args.known_hash)
+        prepared = prepare(
+            args.base_url,
+            args.known_link,
+            args.known_hash,
+            save_to_db=True,
+        )
         result["events"].extend(prepared)
         for event in prepared:
             require(event, event["scenario"])

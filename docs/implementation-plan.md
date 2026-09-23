@@ -1,6 +1,6 @@
 # План реализации Rustorr
 
-Статус: `planned`. Реализация не начата. Этот документ — рабочая точка продолжения между сессиями. Один этап получает статус `in progress` только после явного запуска работ; переход в `done` требует выполнения его критериев выхода и записи доказательств.
+Статус: `R6 in progress, paused by user on 2026-09-23`. Этот документ — рабочая точка продолжения между сессиями. Один этап получает статус `in progress` только после явного запуска работ; переход в `done` требует выполнения его критериев выхода и записи доказательств.
 
 ## Зафиксированный контекст
 
@@ -49,7 +49,7 @@
 
 Handoff: `baseline commit`, окружение, команды запуска, расположение результатов, последний успешный сценарий, незакрытые измерения.
 
-### R2 — Characterization внешних контрактов (`done`)
+### R2 — Характеризация внешних контрактов (`done`)
 
 Цель: превратить поведение эталона в автоматические совместимые проверки.
 
@@ -69,7 +69,7 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 
 Выход: решение `adopt`, `fork` или `reject` с доказательствами; описаны upstream patches и стоимость сопровождения; выбранная политика хранения pieces совместима с cache semantics TorrServer.
 
-### R4 — Архитектурный skeleton Rustorr (`done`)
+### R4 — Архитектурный каркас Rustorr (`done`)
 
 Цель: создать каркас workspace без полного функционального наполнения.
 
@@ -79,229 +79,287 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 
 Детальный план: [`docs/r4-plan.md`](r4-plan.md). Решено 2026-09-21: R4 — только каркас, без `/torrents`/`/stream`; прогон R1 против Rustorr перенесён в R5; состояние хранится в SQLite (`rusqlite`, bundled).
 
-### R5 — Core torrent lifecycle и cache
+### R5 — Основной жизненный цикл торрента и кэш
 
-Цель: реализовать управляемый жизненный цикл торрента и RAM+SSD cache для приоритетных playback-сценариев.
+Цель: реализовать управляемый жизненный цикл торрента и кэш RAM+SSD для приоритетных сценариев воспроизведения.
 
-Задачи: add/load/drop, metadata, file selection, piece availability, reader ranges, preload/readahead, eviction, cancellation, restart persistence, global process budget и observability.
+Задачи: add/load/drop, метаданные, выбор файлов, доступность кусков, диапазоны читателей, preload/readahead, вытеснение, отмена, сохранение между перезапусками, общий бюджет процесса и наблюдаемость.
 
-Также: прогнать `tools/baseline/r1.sh` против Rustorr с теми же scenario IDs, включая `seek-evicted` с детерминированным вытеснением (ADR 0004), и объяснить два ~20-секундных случая, перенесённых из R3.
+Также: прогнать `tools/baseline/r1.sh` против Rustorr с теми же ID сценариев, включая `seek-evicted` с детерминированным вытеснением (ADR 0004), и объяснить два ~20-секундных случая, перенесённых из R3.
 
-Выход: controlled torrent streams проходят seek/restart/eviction tests; кэш не превышает согласованные лимиты; результаты сравнимы с R1.
+Выход: контролируемые потоки торрентов проходят тесты перемотки/перезапуска/вытеснения; кэш не превышает согласованные лимиты; результаты сравнимы с R1.
 
-Implementation status (2026-09-22): done by explicit product decision.
-Lifecycle, cache recovery, deterministic eviction, restart probe and benchmark
-hardening are implemented. Two complete release runs have zero
-functional/control/integrity errors. The approved netem gate remains a recorded
-deviation (`1518.228`/`1652.650 ms` against `988.317 ms`), not a passing claim;
-the paired idle diagnosis found no reproducible Rustorr transport defect. See
+Статус реализации (2026-09-22): done по явному продуктовому решению.
+Жизненный цикл, восстановление кэша, детерминированное вытеснение, проба
+перезапуска и укрепление бенчмарка реализованы. Два полных release-прогона
+не дали ни одной функциональной ошибки, ошибки управления или целостности.
+Утверждённый гейт netem остаётся записанным отклонением (`1518.228`/`1652.650 ms`
+против `988.317 ms`), а не заявлением о прохождении; парная диагностика в
+состоянии покоя не нашла воспроизводимого дефекта транспорта Rustorr. См.
 [`r5-continuation.md`](r5-continuation.md).
 
-### R6 — HTTP streaming и совместимый API
+### R6 — HTTP-стриминг и совместимый API
 
 Цель: сделать существующие клиенты работоспособными без изменений.
 
-Задачи: воспроизвести routes, query flags, status schema, errors, GET/HEAD, ranges, ETag, MIME, playlists, absolute URLs, auth model, CORS/WAF, TLS and reverse proxy semantics.
+Задачи: воспроизвести маршруты, флаги запросов, схему статуса, ошибки, GET/HEAD, диапазоны, ETag, MIME, плейлисты, абсолютные URL, модель авторизации, CORS/WAF, семантику TLS и reverse proxy.
 
-Выход: contract suite R2 зелёная или каждое отличие имеет отдельное принятое решение; raw и GStreamer range behavior не смешаны без доказательства эквивалентности.
+Выход: набор контрактных тестов R2 зелёный или каждое различие имеет отдельное принятое решение; поведение диапазонов raw и GStreamer не смешивается без доказательства эквивалентности.
 
-### R7 — Functional parity modules
+Статус реализации (2026-09-23): in progress, поставлен на паузу пользователем.
+ClientCore, семантика жизненного цикла/каталога, точный документ настроек,
+сырое воспроизведение, плейлисты, auth/CORS/WAF, обработка доверенных прокси и
+герметичный корпус R6 реализованы. Единственный завершённый полный прямой diff
+содержит 11 core-различий; прямой снимок после исправлений, доказательства
+auth/proxy и финальная регрессия ещё не выполнены. См. [`r6-plan.md`](r6-plan.md)
+и [`r6-continuation.md`](r6-continuation.md).
 
-Цель: перенести все возможности MatriX.145, сохраняя capability matrix платформ.
+### R7 — Модули функционального паритета
 
-Порядок: web UI API integration; settings/viewed/storage; Torznab/search/TMDB; DLNA/Bonjour/MSX; WebDAV/FUSE; MCP; ffprobe; GStreamer HLS/remux/transcoding; remaining service/install behaviors.
+Цель: перенести все возможности MatriX.145, сохраняя матрицу возможностей платформ.
 
-Выход: каждая функция имеет implementation note, contract or smoke test, Linux x86_64/aarch64 status, external dependency note и known limitations.
+Порядок: интеграция с API веб-интерфейса; settings/viewed/storage; Torznab/поиск/TMDB; DLNA/Bonjour/MSX; WebDAV/FUSE; MCP; ffprobe; GStreamer HLS/remux/транскодирование; оставшееся поведение service/install.
 
-### R8 — React/Tailwind UI
+Выход: у каждой функции есть заметка о реализации, контрактный или smoke-тест, статус для Linux x86_64/aarch64, заметка о внешних зависимостях и известные ограничения.
+
+### R8 — Интерфейс на React/Tailwind
 
 Цель: предоставить новый интерфейс без изменения серверных клиентских контрактов.
 
-Задачи: TypeScript API client, torrent management, playback/file selection, settings, cache/viewed, search and capability-aware controls; responsive layout; build assets for binary and Docker packaging.
+Задачи: TypeScript-клиент API, управление торрентами, воспроизведение/выбор файлов, настройки, кэш/просмотренное, поиск и элементы управления с учётом возможностей; адаптивная вёрстка; сборка ресурсов для упаковки в бинарник и Docker.
 
-Выход: UI управляет Rustorr через R6 API; основной playback flow проходит в браузере и через M3U/external player links.
+Выход: интерфейс управляет Rustorr через API R6; основной сценарий воспроизведения проходит в браузере и через M3U/ссылки для внешних плееров.
 
-### R9 — Packaging, security и operations
+### R9 — Упаковка, безопасность и эксплуатация
 
 Цель: подготовить пригодную удалённую установку.
 
-Задачи: reproducible Linux builds for `x86_64`/`aarch64`; Docker multi-arch; config/env/volumes; built-in TLS; reverse proxy headers; auth/WAF defaults; structured logs, metrics and tracing; graceful shutdown and backup/restore of Rustorr state.
+Задачи: воспроизводимые сборки Linux для `x86_64`/`aarch64`; мультиархитектурный Docker; конфигурация/env/тома; встроенный TLS; заголовки reverse proxy; значения по умолчанию для auth/WAF; структурированные логи, метрики и tracing; корректная остановка и бэкап/восстановление состояния Rustorr.
 
-Выход: clean install, upgrade, restart and rollback smoke tests; documented resource and traffic assumptions; no secrets in images or logs.
+Выход: smoke-тесты чистой установки, обновления, перезапуска и отката; задокументированные допущения о ресурсах и трафике; никаких секретов в образах и логах.
 
-### R10 — Performance gates и release candidate
+### R10 — Гейты производительности и release candidate
 
 Цель: доказать пользовательское улучшение и функциональный паритет для 1–3 устройств.
 
-Задачи: повторить R1 against Rustorr; compare p50/p95 start/seek, stalls and resources; run full R2/R7 suites; test binary and Docker on both architectures; validate 4-hour daily budget assumptions locally, then on user-selected VPS.
+Задачи: повторить R1 против Rustorr; сравнить p50/p95 старта/перемотки, остановки и ресурсы; прогнать полные наборы R2/R7; протестировать бинарник и Docker на обеих архитектурах; проверить допущения о бюджете 4 часов в день локально, затем на выбранном пользователем VPS.
 
-Выход первой версии: all required MatriX.145 capabilities available on Linux targets, existing clients work without changes, user metrics improve against baseline or deviations are explicitly accepted, no unexplained playback stalls in agreed scenarios, release artifacts reproducibly built.
+Выход первой версии: все обязательные возможности MatriX.145 доступны на Linux-целях, существующие клиенты работают без изменений, пользовательские метрики улучшены относительно baseline или отклонения явно приняты, нет необъяснённых остановок воспроизведения в согласованных сценариях, release-артефакты собираются воспроизводимо.
 
-### R11 — Scale stage to 100 views
+### R11 — Этап масштабирования до 100 просмотров
 
 Цель: подтвердить следующий ориентир после первой версии.
 
-Задачи: 100 direct streams at 25 Mbps; common torrent and 100 distinct torrents; vary cache hit rate and seek; evaluate vertical versus horizontal scaling only from measurements; calculate bandwidth and storage economics.
+Задачи: 100 прямых потоков по 25 Мбит/с; общий торрент и 100 разных торрентов; варьировать долю попаданий в кэш и перемотку; оценивать вертикальное и горизонтальное масштабирование только по замерам; рассчитать экономику трафика и хранения.
 
-Выход: measured capacity envelope, bottleneck map, and a separate scaling ADR if architecture changes are required.
+Выход: измеренные границы ёмкости, карта узких мест и отдельный ADR о масштабировании, если потребуются изменения архитектуры.
 
-## Handoff template
+## Шаблон handoff
 
-Append this block to the stage file or this document after each session:
+После каждой сессии добавлять этот блок в файл этапа или в этот документ:
 
 ```md
 ### Handoff YYYY-MM-DD — Rn
-- Status: planned | in progress | blocked | done
-- Objective completed:
-- Files/artifacts changed:
-- Commands/tests run:
-- Evidence and results:
-- Decisions made:
-- Open risks/questions:
-- Exact next action:
-- Starting directory/commit/config:
+- Статус: planned | in progress | blocked | done
+- Выполненная цель:
+- Изменённые файлы/артефакты:
+- Выполненные команды/тесты:
+- Доказательства и результаты:
+- Принятые решения:
+- Открытые риски/вопросы:
+- Точное следующее действие:
+- Исходный каталог/commit/конфигурация:
 ```
 
-## Current checkpoint
+## Текущая контрольная точка
 
-- Current stage: `R6` ready; R0–R5 are complete.
-- Implementation status: lifecycle/cache stabilization and the hardened R1
-  runner are complete. The workspace has seven crates, including
-  `rustorr-lifecycle`; production packaging remains non-root and multi-arch.
-- Latest valid evidence: `tools/r4.sh check` passes 179 tests; the feature
-  suite passes. Reference runs `20260921T163650Z` and `20260921T163912Z` and
-  candidate runs `20260921T164519Z` and `20260921T164721Z` all complete the
-  repeated netem sample set. The candidate pair has zero
-  request/integrity/precondition/control errors. Restart artifact
-  `20260921T151011Z-restart` proves a cached 206 after restart without a peer.
-- Accepted deviation: the approved two-run, 20-sample netem floor is
-  `988.317 ms`, while Rustorr's per-run p95 values are `1518.228 ms` and
-  `1652.650 ms`. The paired idle transport diagnosis found no reproducible
-  Rustorr defect; the user accepted R5 closure without representing this as a
-  passing gate. The evidence and re-open procedure are in
-  [`r5-continuation.md`](r5-continuation.md).
-- Next action: begin R6 HTTP/API compatibility work.
+- Текущий этап: `R6` in progress, поставлен на паузу пользователем 2026-09-23;
+  R0–R5 завершены.
+- Статус реализации: seam ClientCore R6, семантика жизненного цикла/каталога,
+  снимки кэша, точные настройки, сырое воспроизведение, плейлисты,
+  auth/CORS/WAF, обработка доверенных прокси и расширенный герметичный
+  контрактный корпус присутствуют в намеренно незакоммиченном рабочем дереве.
+- Последние полные прямые доказательства используют старый хеш манифеста
+  `d41f6612…`: снимки эталона и кандидата оба действительны, 45 случаев и ноль
+  сбоев, но `/tmp/rustorr-contract/r6-direct-diff.json` провален с 11
+  core-различиями и 4 ожидаемыми отложенными различиями. Исправления
+  реализованы после этого, но полного снимка после исправлений нет, поэтому
+  паритет не заявляется.
+- Последние проверки кода: последний полный `tools/r4.sh check` прошёл 184
+  теста до финальных изменений кэша/wire/процессных тестов. Целевые тесты
+  кэша/lifecycle/HTTP позже прошли `55 + 12 + 13` вместе с целевым clippy и
+  проверкой всех целей workspace. Недавно добавленный процессный тест auth не
+  запускался.
+- Принятое отклонение: утверждённый порог netem для двух прогонов по 20
+  замеров — `988.317 ms`, тогда как значения p95 по прогонам у Rustorr —
+  `1518.228 ms` и `1652.650 ms`. Парная диагностика транспорта в состоянии
+  покоя не нашла воспроизводимого дефекта Rustorr; пользователь принял
+  закрытие R5, не представляя это как пройденный гейт. Доказательства и
+  процедура переоткрытия — в [`r5-continuation.md`](r5-continuation.md).
+- Состояние выполнения: прерванный снимок `r6-reference-fixes3` отброшен;
+  контейнеры и сеть контрактного стенда R1/R6 остановлены. Снимки auth/proxy,
+  матрица сохранения/перезапуска и финальная регрессия ещё не выполнены.
+- Следующее действие после явного возобновления: следовать
+  [`r6-continuation.md`](r6-continuation.md), сначала повторив проверки
+  текущего дерева и получив прямые снимки эталона/кандидата с совпадающим
+  манифестом. Не закрывать R6, пока остаётся хоть одно core-различие в
+  семантике.
+
+### Handoff 2026-09-23 — контрольная точка паузы R6
+
+- Статус: `in progress`, поставлен на паузу пользователем; commit и push не
+  выполнялись.
+- Выполненная цель: в рабочем дереве находится обширная реализация R6 и
+  контрактный стенд, включая ClientCore, маршруты torrents/playback/M3U/
+  settings/viewed/cache, политику доступа и расширения сохранения.
+- Изменённые файлы/артефакты: crate Rust-workspace, контрактные инструменты
+  R2/R6 и Compose-overlay, манифесты совместимости/отложенных маршрутов,
+  `r6-plan.md`, этот план и [`r6-continuation.md`](r6-continuation.md).
+- Выполненные команды/тесты: последний полный `tools/r4.sh check` (184 теста,
+  до последних изменений); позже целевые тесты кэша/lifecycle/HTTP (55/12/13),
+  целевой clippy и проверка всех целей workspace; несколько контрактных
+  снимков эталона/кандидата и фокусные smoke эталона.
+- Доказательства и результаты: действительные снимки эталона/кандидата по 45
+  случаев со старым манифестом и провальный diff с 11 core-различиями в
+  `/tmp/rustorr-contract/`; фокусные снимки эталона cache/range, viewed и
+  metadata/playlist действительны. Последний полный снимок после исправлений
+  не завершён.
+- Принятые решения: создавать трекер, сидер и цель один раз на корпус;
+  изолировать состояние сценариев через подготовку/очистку цели; различать
+  готовность по метаданным и готовность к воспроизведению; никогда не
+  сравнивать снимки с разными хешами манифеста.
+- Открытые риски/вопросы: текущему стенду ещё нужна проверка полным корпусом;
+  прямой паритет после исправлений, паритет BasicAuth/proxy,
+  сохранение/перезапуск и финальные release-регрессии не доказаны. Отклонение
+  netem R5 остаётся принятым, но не пройденным.
+- Точное следующее действие: при явном возобновлении начать с
+  последовательности проверок и прямого снимка с текущим манифестом из
+  `r6-continuation.md`.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`,
+  ветка `r3-engine-spike`, базовый HEAD
+  `7f72513582a15732196e7f397f04413ad7392deb`, намеренно незакоммиченное
+  дерево, контрактный стенд остановлен.
 
 ### Handoff 2026-09-20 — R1
-- Status: done
-- Objective completed: Docker baseline stack, deterministic single/multi-file torrent smoke path, full HTTP workload-matrix runner, controlled netem/peer-departure orchestration and per-scenario aggregation.
-- Files/artifacts changed: `docker-compose.baseline.yml`, `tools/baseline/`, `.gitignore`, this checkpoint.
-- Commands/tests run: `tools/baseline/r1.sh run` with Docker Desktop; `sh -n tools/baseline/r1.sh`; Python compile check; Compose config validation; fixture reproducibility diff.
-- Evidence and results: `/tmp/rustorr-baseline/20260920T122608Z` and [`docs/benchmark-baseline.json`](benchmark-baseline.json); TorrServer MatriX.145 built from pinned commit; cold/warm/magnet/seek/1-view/3-view rows executed; netem apply/clear both returned code 0; seeder stop returned code 0; controlled rows returned HTTP `206`. Latest run recorded 0 failed requests, p50 `7.5 ms`, p95 `10814.8 ms`, and 12 transport stall-threshold events. Two-run aggregation records cold known-torrent p95 `10911.5 ms`, warm p95 `4976.2 ms`, seek-loaded p95 `4512.8 ms`, netem `579.7 ms`, and peer-departure recovery `3.9 ms`.
-- Decisions made: Go entrypoint is `./server/cmd`; Docker build uses Go 1.25; tracker uses generated whitelist; seeder uses Transmission with existing-file verification.
-- Decisions made: approved baseline-derived parity floors in `docs/benchmark-baseline.json`; accepted that eviction is represented by an explicit precondition because TorrServer exposes no deterministic eviction API in this harness; accepted that peer departure did not stall because the requested range was already available; transport stall proxy is not decoded-player rebuffering evidence.
-- Open risks/questions: cold Range latency is currently measured separately from control-plane p50/p95; player-level rebuffering and deterministic eviction remain follow-up characterization concerns.
-- Exact next action: start R2 contract characterization against the pinned TorrServer reference.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, working tree after `0741c0d`, Docker context `desktop-linux`, Compose file `docker-compose.baseline.yml`.
+- Статус: done
+- Выполненная цель: baseline-стенд в Docker, детерминированный smoke-путь для однофайловых и многофайловых торрентов, раннер полной матрицы HTTP-нагрузок, контролируемая оркестрация netem/ухода пира и агрегация по сценариям.
+- Изменённые файлы/артефакты: `docker-compose.baseline.yml`, `tools/baseline/`, `.gitignore`, эта контрольная точка.
+- Выполненные команды/тесты: `tools/baseline/r1.sh run` с Docker Desktop; `sh -n tools/baseline/r1.sh`; проверка компиляции Python; валидация конфигурации Compose; diff воспроизводимости фикстур.
+- Доказательства и результаты: `/tmp/rustorr-baseline/20260920T122608Z` и [`docs/benchmark-baseline.json`](benchmark-baseline.json); TorrServer MatriX.145 собран из зафиксированного commit; выполнены строки cold/warm/magnet/seek/1-view/3-view; применение/снятие netem оба вернули код 0; остановка сидера вернула код 0; контролируемые строки вернули HTTP `206`. Последний прогон зафиксировал 0 неудачных запросов, p50 `7.5 ms`, p95 `10814.8 ms` и 12 событий превышения порога транспортной остановки. Агрегация двух прогонов фиксирует p95 холодного известного торрента `10911.5 ms`, тёплого — `4976.2 ms`, seek-loaded — `4512.8 ms`, netem `579.7 ms` и восстановление после ухода пира `3.9 ms`.
+- Принятые решения: точка входа Go — `./server/cmd`; сборка Docker использует Go 1.25; трекер использует сгенерированный whitelist; сидер использует Transmission с проверкой существующих файлов.
+- Принятые решения: утверждены выведенные из baseline пороги паритета в `docs/benchmark-baseline.json`; принято, что вытеснение представлено явным предусловием, поскольку в этом стенде TorrServer не предоставляет детерминированного API вытеснения; принято, что уход пира не вызвал остановки, так как запрошенный диапазон уже был доступен; прокси транспортной остановки не является доказательством ребуферизации плеера с декодированием.
+- Открытые риски/вопросы: задержка холодного Range сейчас измеряется отдельно от p50/p95 управляющего уровня; ребуферизация на уровне плеера и детерминированное вытеснение остаются задачами последующей характеризации.
+- Точное следующее действие: начать характеризацию контрактов R2 против зафиксированного эталона TorrServer.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, рабочее дерево после `0741c0d`, Docker-контекст `desktop-linux`, Compose-файл `docker-compose.baseline.yml`.
 
-### Handoff 2026-09-20 — R2 start
-- Status: in progress
-- Objective completed: contract manifest, raw corpus runner, semantic diff and compatibility matrix skeleton added; deterministic Unicode/nested-path/external-track fixture added without changing the existing single fixture hash.
-- Files/artifacts changed: `tools/contract/`, `tools/r2.sh`, `tools/baseline/generate-fixtures.py`.
-- Commands/tests run: static checks plus Docker Compose reference stack; two control-plane captures with `tools/r2.sh capture reference --timeout 3 --only ...`; semantic diff; direct TorrServer Range probe; Docker status/log and fixture hash checks.
-- Evidence and results: `/tmp/rustorr-contract/20260920T144518Z/reference.json` contains 34 cases with 0 request errors: control endpoints (200/204/400/404), raw GET/HEAD, single/suffix/open/multipart Range (`206`), M3U, GStreamer, CORS and MCP Streamable HTTP. Proxy capture `/tmp/rustorr-contract/20260920T145209Z/candidate.json` confirms forwarded-host M3U URLs and VLC external `.ac3`/`.srt` tracks through nginx on `127.0.0.1:8091`; TLS capture `/tmp/rustorr-contract/20260920T145806Z/candidate.json` has 0 errors and media M3U/ForkPlayer outputs contain only `https://` URLs through self-signed HTTPS on `8443`. Raw corpus preserves response bytes, hashes and JSON; normalization explicitly covers Date/Last-Modified, timestamps, peer/runtime counters, derived JSON Content-Length and generated multipart boundaries. The seeder fix `--encryption-tolerated` was validated by R1-compatible `connected_seeders=1` and HTTP `206`; clean repeatability was previously proven with `/tmp/rustorr-contract/20260920T135227Z*` and normalized `equal=true`.
-- Decisions made: R2 corpus stores raw body bytes as base64 and decoded JSON together; raw and GStreamer probes remain separate scenarios; capability-specific endpoints remain visible when the reference returns 404.
-- Open risks/questions: optional media routes remain capability-dependent; direct TorrServer built-in TLS startup was not exercised, while reverse-proxy TLS and forwarded URL generation are covered; same-container repeat requires recreating the seeder because a full-file read does not reliably restore its peer lifecycle; branch/draft-PR creation is blocked by sandbox `.git` write restrictions and invalid GitHub auth.
-- Exact next action: accept the direct built-in TLS probe as a deployment follow-up or add a TLS-enabled TorrServer startup profile, then close R2 and hand off the contract suite to R6.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, current working tree after R1.
+### Handoff 2026-09-20 — начало R2
+- Статус: in progress
+- Выполненная цель: добавлены контрактный манифест, раннер сырого корпуса, семантический diff и каркас матрицы совместимости; добавлена детерминированная фикстура с Unicode/вложенными путями/внешними дорожками без изменения хеша существующей одиночной фикстуры.
+- Изменённые файлы/артефакты: `tools/contract/`, `tools/r2.sh`, `tools/baseline/generate-fixtures.py`.
+- Выполненные команды/тесты: статические проверки плюс эталонный стенд Docker Compose; два снимка управляющего уровня через `tools/r2.sh capture reference --timeout 3 --only ...`; семантический diff; прямая Range-проба TorrServer; проверки статуса/логов Docker и хешей фикстур.
+- Доказательства и результаты: `/tmp/rustorr-contract/20260920T144518Z/reference.json` содержит 34 случая с 0 ошибок запросов: управляющие эндпоинты (200/204/400/404), сырые GET/HEAD, одиночный/суффиксный/открытый/multipart Range (`206`), M3U, GStreamer, CORS и MCP Streamable HTTP. Снимок через прокси `/tmp/rustorr-contract/20260920T145209Z/candidate.json` подтверждает URL в M3U с forwarded host и внешние дорожки VLC `.ac3`/`.srt` через nginx на `127.0.0.1:8091`; TLS-снимок `/tmp/rustorr-contract/20260920T145806Z/candidate.json` без ошибок, а медиа-выводы M3U/ForkPlayer содержат только URL `https://` через самоподписанный HTTPS на `8443`. Сырой корпус сохраняет байты ответов, хеши и JSON; нормализация явно покрывает Date/Last-Modified, временные метки, счётчики пиров/runtime, производный Content-Length JSON и сгенерированные границы multipart. Исправление сидера `--encryption-tolerated` подтверждено совместимым с R1 `connected_seeders=1` и HTTP `206`; чистая повторяемость ранее доказана через `/tmp/rustorr-contract/20260920T135227Z*` с нормализованным `equal=true`.
+- Принятые решения: корпус R2 хранит сырые байты тела в base64 вместе с декодированным JSON; пробы raw и GStreamer остаются отдельными сценариями; capability-specific эндпоинты остаются видимыми, когда эталон возвращает 404.
+- Открытые риски/вопросы: необязательные медиа-маршруты остаются зависимыми от возможностей; запуск TorrServer со встроенным TLS напрямую не проверялся, тогда как TLS через reverse proxy и генерация forwarded URL покрыты; повтор в том же контейнере требует пересоздания сидера, потому что чтение полного файла ненадёжно восстанавливает его жизненный цикл пира; создание ветки/draft PR заблокировано ограничениями sandbox на запись в `.git` и недействительной авторизацией GitHub.
+- Точное следующее действие: принять прямую пробу встроенного TLS как задачу развёртывания или добавить профиль запуска TorrServer с TLS, затем закрыть R2 и передать контрактный набор в R6.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, текущее рабочее дерево после R1.
 
-### Handoff 2026-09-20 — R3 start
-- Status: in progress
-- Objective completed: isolated `librqbit` spike project and Docker overlay added; final engine decision remains pending runtime evidence.
-- Files/artifacts changed: `tools/engine-spike/`, `docker-compose.r3-engine.yml`, `docs/engine-spike.md`, `docs/adr/0003-bittorrent-engine-selection.md`.
-- Commands/tests run: source inspection against pinned upstream API; shell validation and Docker-backed Rust checks are pending environment access.
-- Evidence and results: probe records metadata, file mapping, positional read/seek, cancellation, persistence configuration and recording storage callbacks; raw results target `/tmp/rustorr-engine-spike`.
-- Decisions made: `librqbit` is pinned to `9.0.1` for the first spike; the adapter is isolated from production HTTP/cache APIs; ADR 0003 is `proposed` until matrix evidence exists.
-- Open risks/questions: current environment has no host `cargo/rustc` and Docker daemon access is unavailable; eviction/re-fetch, DHT/PEX/uTP and two-repeat performance matrix remain unverified.
-- Exact next action: enable Rust/Docker execution, generate and commit `tools/engine-spike/Cargo.lock`, run the R1 matrix twice, then complete the storage eviction/re-fetch probe and ADR decision.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, `b816f5a`, baseline Compose plus `docker-compose.r3-engine.yml`.
+### Handoff 2026-09-20 — начало R3
+- Статус: in progress
+- Выполненная цель: добавлены изолированный spike-проект `librqbit` и Docker-overlay; окончательное решение по движку ждёт доказательств выполнения.
+- Изменённые файлы/артефакты: `tools/engine-spike/`, `docker-compose.r3-engine.yml`, `docs/engine-spike.md`, `docs/adr/0003-bittorrent-engine-selection.md`.
+- Выполненные команды/тесты: анализ исходников по зафиксированному upstream API; валидация shell и проверки Rust в Docker ждут доступа к окружению.
+- Доказательства и результаты: проба фиксирует метаданные, отображение файлов, позиционное чтение/перемотку, отмену, конфигурацию сохранения и записывающие колбэки хранилища; сырые результаты направляются в `/tmp/rustorr-engine-spike`.
+- Принятые решения: для первого spike `librqbit` зафиксирован на `9.0.1`; адаптер изолирован от production API HTTP/кэша; ADR 0003 остаётся `proposed`, пока нет доказательств по матрице.
+- Открытые риски/вопросы: в текущем окружении нет `cargo/rustc` на хосте и нет доступа к демону Docker; вытеснение/повторная загрузка, DHT/PEX/uTP и матрица производительности с двумя повторами не проверены.
+- Точное следующее действие: включить выполнение Rust/Docker, сгенерировать и закоммитить `tools/engine-spike/Cargo.lock`, дважды прогнать матрицу R1, затем завершить пробу вытеснения/повторной загрузки хранилища и решение в ADR.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, `b816f5a`, baseline Compose плюс `docker-compose.r3-engine.yml`.
 
-### Handoff 2026-09-20 — R2 complete
-- Status: done
-- Objective completed: reproducible TorrServer contract suite with 34 reference scenarios, raw corpus, semantic diff, compatibility matrix, deterministic media fixtures, seeder reset orchestration, HTTP reverse-proxy profile and direct TorrServer TLS profile.
-- Files/artifacts changed: `tools/contract/`, `tools/r2.sh`, `docker-compose.r2-proxy.yml`, `tools/baseline/docker/start-seeder.sh`, `tools/baseline/generate-fixtures.py`, `docs/implementation-plan.md`.
-- Commands/tests run: Python compile, shell syntax, JSON validation, Compose validation; reference capture `/tmp/rustorr-contract/20260920T144518Z` with 34 cases and 0 errors; proxy HTTP/TLS captures `/tmp/rustorr-contract/20260920T145209Z` and `/tmp/rustorr-contract/20260920T145806Z`; direct TorrServer TLS capture `/tmp/rustorr-contract/20260920T150748Z` with 0 errors; clean repeatability `/tmp/rustorr-contract/20260920T135227Z*` with normalized `equal=true`.
-- Evidence and results: API/control statuses, GET/HEAD, single/suffix/open/multipart Range, ETag/MIME/body capture, M3U with Unicode external tracks, VLC directives, ForkPlayer suffix, CORS, MCP, optional capability routes, reverse-proxy forwarded URLs and direct HTTPS behavior are recorded. The seeder uses `--encryption-tolerated` to interoperate with TorrServer's obfuscated peer handshake.
-- Decisions made: dynamic values are normalized only through manifest-declared policy; raw response bytes and hashes remain preserved; optional 404 capabilities remain visible rather than filtered; clean repeat runs recreate the one-shot seeder lifecycle.
-- Open risks/questions: production certificate rotation and auth deployment belong to R9; branch/draft-PR creation remains blocked by sandbox `.git` write restrictions and invalid GitHub auth.
-- Exact next action: start R3 engine spike with the pinned R1 scenarios, preserving R2 contract constraints.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, Docker Compose baseline plus `docker-compose.r2-proxy.yml`, pinned TorrServer MatriX.145.
+### Handoff 2026-09-20 — R2 завершён
+- Статус: done
+- Выполненная цель: воспроизводимый контрактный набор TorrServer с 34 эталонными сценариями, сырым корпусом, семантическим diff, матрицей совместимости, детерминированными медиа-фикстурами, оркестрацией сброса сидера, HTTP-профилем reverse proxy и профилем прямого TLS TorrServer.
+- Изменённые файлы/артефакты: `tools/contract/`, `tools/r2.sh`, `docker-compose.r2-proxy.yml`, `tools/baseline/docker/start-seeder.sh`, `tools/baseline/generate-fixtures.py`, `docs/implementation-plan.md`.
+- Выполненные команды/тесты: компиляция Python, синтаксис shell, валидация JSON, валидация Compose; эталонный снимок `/tmp/rustorr-contract/20260920T144518Z` с 34 случаями и 0 ошибок; HTTP/TLS-снимки через прокси `/tmp/rustorr-contract/20260920T145209Z` и `/tmp/rustorr-contract/20260920T145806Z`; прямой TLS-снимок TorrServer `/tmp/rustorr-contract/20260920T150748Z` с 0 ошибок; чистая повторяемость `/tmp/rustorr-contract/20260920T135227Z*` с нормализованным `equal=true`.
+- Доказательства и результаты: записаны статусы API/управления, GET/HEAD, одиночный/суффиксный/открытый/multipart Range, снимок ETag/MIME/тела, M3U с Unicode-внешними дорожками, директивы VLC, суффикс ForkPlayer, CORS, MCP, необязательные маршруты возможностей, forwarded URL через reverse proxy и поведение прямого HTTPS. Сидер использует `--encryption-tolerated` для совместимости с обфусцированным рукопожатием пиров TorrServer.
+- Принятые решения: динамические значения нормализуются только через объявленную в манифесте политику; сырые байты ответов и хеши сохраняются; необязательные возможности с 404 остаются видимыми, а не отфильтровываются; чистые повторные прогоны пересоздают одноразовый жизненный цикл сидера.
+- Открытые риски/вопросы: ротация production-сертификатов и развёртывание auth относятся к R9; создание ветки/draft PR по-прежнему заблокировано ограничениями sandbox на запись в `.git` и недействительной авторизацией GitHub.
+- Точное следующее действие: начать engine spike R3 с зафиксированными сценариями R1, сохраняя ограничения контрактов R2.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, baseline Docker Compose плюс `docker-compose.r2-proxy.yml`, зафиксированный TorrServer MatriX.145.
 
-### Handoff 2026-09-20 — R3 implementation checkpoint
-- Status: in progress
-- Objective completed: isolated `librqbit` spike harness, recording storage factory, Docker Compose overlay and pinned Cargo dependency graph are implemented; no runtime gate has passed yet.
-- Files/artifacts changed: `tools/engine-spike/`, `docker-compose.r3-engine.yml`, `docs/engine-spike.md`, `docs/adr/0003-bittorrent-engine-selection.md`, this plan, and generated `tools/engine-spike/Cargo.lock`.
-- Commands/tests run: Compose config validation; Docker release build of `rustorr-engine-spike` with `librqbit 9.0.1`; binary `--help`; `sh -n tools/engine-spike/run.sh`; `git diff --check`. Rustfmt check was attempted but the image did not yet install the `rustfmt` component; Dockerfile was updated to install `rustfmt` and `clippy` for the next build.
-- Evidence and results: build passed inside Docker's internal filesystem after a host bind-mounted cargo check hit rustc SIGBUS. The interrupted probe produced no valid measurement: `/tmp/rustorr-engine-spike/20260920T153748Z/probe.json` is empty; only an 8 MiB state file was created.
-- Decisions made: `librqbit 9.0.1` and Rust `1.90.0` remain the pinned first candidate; ADR 0003 stays `proposed`; the empty probe is explicitly discarded and must not be used as evidence.
-- Open risks/questions: probe lifecycle/flush behavior is unresolved; cancellation, custom-storage runtime callbacks, persistence, eviction/re-fetch, DHT/PEX/uTP and two-repeat performance matrix remain unverified.
-- Exact next action: rebuild the image with rustfmt/clippy installed, run a bounded `--disable-dht` known-torrent probe, inspect its exit/JSON output, then continue with cancellation and eviction/re-fetch tests.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, working tree after the R3 spike files, Docker Compose baseline plus `docker-compose.r3-engine.yml`, raw attempt `/tmp/rustorr-engine-spike/20260920T153748Z`.
+### Handoff 2026-09-20 — контрольная точка реализации R3
+- Статус: in progress
+- Выполненная цель: реализованы изолированный spike-стенд `librqbit`, записывающая фабрика хранилища, Docker Compose overlay и зафиксированный граф зависимостей Cargo; ни один runtime-гейт ещё не пройден.
+- Изменённые файлы/артефакты: `tools/engine-spike/`, `docker-compose.r3-engine.yml`, `docs/engine-spike.md`, `docs/adr/0003-bittorrent-engine-selection.md`, этот план и сгенерированный `tools/engine-spike/Cargo.lock`.
+- Выполненные команды/тесты: валидация конфигурации Compose; release-сборка `rustorr-engine-spike` в Docker с `librqbit 9.0.1`; `--help` бинарника; `sh -n tools/engine-spike/run.sh`; `git diff --check`. Была попытка проверки rustfmt, но в образе ещё не был установлен компонент `rustfmt`; Dockerfile обновлён, чтобы установить `rustfmt` и `clippy` для следующей сборки.
+- Доказательства и результаты: сборка прошла во внутренней файловой системе Docker после того, как cargo check через bind mount хоста получил SIGBUS в rustc. Прерванная проба не дала действительного замера: `/tmp/rustorr-engine-spike/20260920T153748Z/probe.json` пуст; создан только файл состояния на 8 MiB.
+- Принятые решения: `librqbit 9.0.1` и Rust `1.90.0` остаются зафиксированным первым кандидатом; ADR 0003 остаётся `proposed`; пустая проба явно отброшена и не должна использоваться как доказательство.
+- Открытые риски/вопросы: поведение жизненного цикла/сброса пробы не выяснено; отмена, runtime-колбэки пользовательского хранилища, сохранение, вытеснение/повторная загрузка, DHT/PEX/uTP и матрица производительности с двумя повторами не проверены.
+- Точное следующее действие: пересобрать образ с установленными rustfmt/clippy, запустить ограниченную пробу известного торрента с `--disable-dht`, проверить её код выхода/JSON-вывод, затем продолжить тестами отмены и вытеснения/повторной загрузки.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, рабочее дерево после файлов spike R3, baseline Docker Compose плюс `docker-compose.r3-engine.yml`, сырая попытка `/tmp/rustorr-engine-spike/20260920T153748Z`.
 
-### Handoff 2026-09-20 — R3 runtime evidence
-- Status: in progress
-- Objective completed: bounded Docker runtime probe, deterministic known-torrent reads, seek reads, cancellation, recording-storage lifecycle, three concurrent views and session delete/re-add/refetch.
-- Files/artifacts changed: `tools/engine-spike/`, `docker-compose.baseline.yml`, `docker-compose.r3-engine.yml`, `docs/engine-spike.md`, `docs/adr/0003-bittorrent-engine-selection.md`, this plan, and `tools/engine-spike/Cargo.lock`.
-- Commands/tests run: release Docker build; rustfmt `--check`; clippy `--locked --release -- -D warnings`; Compose config validation; `sh -n tools/engine-spike/run.sh`; `git diff --check`; bounded probes with DHT disabled and raw output under `/tmp/rustorr-engine-spike/`.
-- Evidence and results: two fresh known-torrent repeats matched SHA-256 `31e67ed8a3c058d5d68dfac1cd83c24b6ade45ffea0f7833d8eaa3951eae643b`; fresh seek matched `210ba6b19ee6a72f875261cd3a41d030fad18470c0fc633ee61b1a7d84174795`; three concurrent views matched; magnet metadata resolved and read matched; same-output persistence restart restored `262144` bytes with a `3.7 ms` read; custom storage recorded `creates=1`, `inits=1`, `takes=1`, `writes=20`, `reads=6`, `completed_pieces=1`; delete/re-add/refetch matched with two storage creations and two completed pieces; cancellation exited cleanly. The earlier stale-volume batch is excluded.
-- Decisions made: `librqbit 9.0.1` remains the first candidate; the engine adapter remains isolated; session delete/re-add is accepted as a lifecycle gate but not as proof of piece-level eviction; same-output persistence fast-resume is evidenced but not generalized; ADR 0003 remains `proposed`.
-- Open risks/questions: DHT/PEX/uTP capability and resource checks, piece-level cache eviction policy, and repeat performance parity against R1 floors remain open. The Unicode fixture is excluded from this probe because Transmission reports it as `0% None`.
-- Exact next action: add the remaining capability-specific probes, run the agreed repeat performance matrix, then make the adopt/fork/reject decision in ADR 0003.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, current working tree after the R3 runtime evidence, Docker Compose baseline plus `docker-compose.r3-engine.yml`, raw results `/tmp/rustorr-engine-spike/`.
+### Handoff 2026-09-20 — доказательства выполнения R3
+- Статус: in progress
+- Выполненная цель: ограниченная runtime-проба в Docker, детерминированные чтения известного торрента, чтения с перемоткой, отмена, жизненный цикл записывающего хранилища, три одновременных просмотра и удаление/повторное добавление/повторная загрузка в сессии.
+- Изменённые файлы/артефакты: `tools/engine-spike/`, `docker-compose.baseline.yml`, `docker-compose.r3-engine.yml`, `docs/engine-spike.md`, `docs/adr/0003-bittorrent-engine-selection.md`, этот план и `tools/engine-spike/Cargo.lock`.
+- Выполненные команды/тесты: release-сборка в Docker; rustfmt `--check`; clippy `--locked --release -- -D warnings`; валидация конфигурации Compose; `sh -n tools/engine-spike/run.sh`; `git diff --check`; ограниченные пробы с отключённым DHT и сырым выводом в `/tmp/rustorr-engine-spike/`.
+- Доказательства и результаты: два новых повтора известного торрента совпали по SHA-256 `31e67ed8a3c058d5d68dfac1cd83c24b6ade45ffea0f7833d8eaa3951eae643b`; новая перемотка совпала с `210ba6b19ee6a72f875261cd3a41d030fad18470c0fc633ee61b1a7d84174795`; три одновременных просмотра совпали; метаданные magnet получены, чтение совпало; перезапуск с сохранением в тот же каталог восстановил `262144` байт с чтением за `3.7 ms`; пользовательское хранилище зафиксировало `creates=1`, `inits=1`, `takes=1`, `writes=20`, `reads=6`, `completed_pieces=1`; удаление/повторное добавление/повторная загрузка совпали при двух созданиях хранилища и двух завершённых кусках; отмена завершилась корректно. Прежняя серия с устаревшим томом исключена.
+- Принятые решения: `librqbit 9.0.1` остаётся первым кандидатом; адаптер движка остаётся изолированным; удаление/повторное добавление в сессии принято как гейт жизненного цикла, но не как доказательство вытеснения на уровне кусков; fast-resume с сохранением в тот же каталог подтверждён, но не обобщается; ADR 0003 остаётся `proposed`.
+- Открытые риски/вопросы: проверки возможностей DHT/PEX/uTP и ресурсов, политика вытеснения кэша на уровне кусков и повторяемый паритет производительности относительно порогов R1 остаются открытыми. Unicode-фикстура исключена из этой пробы, потому что Transmission показывает её как `0% None`.
+- Точное следующее действие: добавить оставшиеся пробы конкретных возможностей, прогнать согласованную матрицу повторов производительности, затем принять решение adopt/fork/reject в ADR 0003.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, текущее рабочее дерево после доказательств выполнения R3, baseline Docker Compose плюс `docker-compose.r3-engine.yml`, сырые результаты `/tmp/rustorr-engine-spike/`.
 
-### Handoff 2026-09-21 — R3 capability and repeat matrix
-- Status: in progress
-- Objective completed: added observable DHT/listener capability output and `--views N` concurrent reads to the isolated librqbit probe; ran capability, persistence-relocation, repeat matrix and resource-accounting checks.
-- Files/artifacts changed: `tools/engine-spike/src/main.rs`, `docs/engine-spike.md`, `docs/adr/0003-bittorrent-engine-selection.md`, `docs/r3-continuation.md`, this plan.
-- Commands/tests run: Docker release build; `rustfmt --check`; `cargo clippy --locked --release -- -D warnings`; DHT bootstrap/client, TCP+uTP listener and uTP-only probes; persisted-session output relocation; two cold reads, two seek reads and two three-view reads; Docker stats sample; `git diff --check`.
-- Evidence and results: `/tmp/rustorr-engine-spike/20260920T170225Z/probe.json` shows DHT enabled, listener bound and correct digest; `/tmp/rustorr-engine-spike/20260920T171757Z/probe.json` shows `live_utp=1` and `live_tcp=0`; `/tmp/rustorr-engine-spike/dht-two-peer-20260921T172000Z/client.json` shows `routing_table_size=58` and the expected digest; `/tmp/rustorr-engine-spike/persistence-restore-20260921T170500Z/` shows moved output causes fresh peer fetch; `/tmp/rustorr-engine-spike/repeat-20260921T170700Z/` has all expected digests for the repeat matrix and resource samples of RSS `6.16–6.52 MiB` and CPU `0.22–1.78%`.
-- Decisions made: engine timings are repeatability evidence only and are not substituted for R1 HTTP/player parity; same-output fast-resume is not generalized; ADR 0003 remains `proposed`; PEX is not marked exercised because no public runtime counter exists.
-- Open risks/questions: tracker-hidden two-peer PEX exchange, product cache eviction seam and a defined mapping from engine timings to R1 metrics remain open; DHT bootstrap discovery and uTP-only transfer now pass.
-- Exact next action: build a two-peer capability harness, define the cache eviction seam and performance comparison, then make the adopt/fork/reject decision in ADR 0003.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, working tree after the R3 capability/repeat changes, Docker Compose baseline plus `docker-compose.r3-engine.yml`, raw results under `/tmp/rustorr-engine-spike/`.
+### Handoff 2026-09-21 — возможности R3 и матрица повторов
+- Статус: in progress
+- Выполненная цель: в изолированную пробу librqbit добавлены наблюдаемый вывод возможностей DHT/листенера и одновременные чтения `--views N`; выполнены проверки возможностей, переноса сохранения, матрицы повторов и учёта ресурсов.
+- Изменённые файлы/артефакты: `tools/engine-spike/src/main.rs`, `docs/engine-spike.md`, `docs/adr/0003-bittorrent-engine-selection.md`, `docs/r3-continuation.md`, этот план.
+- Выполненные команды/тесты: release-сборка в Docker; `rustfmt --check`; `cargo clippy --locked --release -- -D warnings`; пробы DHT bootstrap/клиент, листенера TCP+uTP и только uTP; перенос выходного каталога сохранённой сессии; два холодных чтения, два чтения с перемоткой и два чтения с тремя просмотрами; замер статистики Docker; `git diff --check`.
+- Доказательства и результаты: `/tmp/rustorr-engine-spike/20260920T170225Z/probe.json` показывает включённый DHT, привязанный листенер и корректный дайджест; `/tmp/rustorr-engine-spike/20260920T171757Z/probe.json` показывает `live_utp=1` и `live_tcp=0`; `/tmp/rustorr-engine-spike/dht-two-peer-20260921T172000Z/client.json` показывает `routing_table_size=58` и ожидаемый дайджест; `/tmp/rustorr-engine-spike/persistence-restore-20260921T170500Z/` показывает, что перенос выходного каталога приводит к новой загрузке с пира; `/tmp/rustorr-engine-spike/repeat-20260921T170700Z/` содержит все ожидаемые дайджесты матрицы повторов и замеры ресурсов RSS `6.16–6.52 MiB` и CPU `0.22–1.78%`.
+- Принятые решения: тайминги движка — только доказательство повторяемости и не подменяют паритет HTTP/плеера R1; fast-resume в тот же каталог не обобщается; ADR 0003 остаётся `proposed`; PEX не отмечен как проверенный, поскольку публичного runtime-счётчика нет.
+- Открытые риски/вопросы: обмен PEX между двумя пирами со скрытым трекером, продуктовый seam вытеснения кэша и определённое сопоставление таймингов движка с метриками R1 остаются открытыми; обнаружение через DHT bootstrap и передача только через uTP теперь проходят.
+- Точное следующее действие: построить двухпировый стенд возможностей, определить seam вытеснения кэша и сравнение производительности, затем принять решение adopt/fork/reject в ADR 0003.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, рабочее дерево после изменений возможностей/повторов R3, baseline Docker Compose плюс `docker-compose.r3-engine.yml`, сырые результаты в `/tmp/rustorr-engine-spike/`.
 
-### Handoff 2026-09-21 — R3 DHT and uTP gates
-- Status: in progress
-- Objective completed: closed the isolated DHT-bootstrap discovery and actual uTP-transfer gates for the librqbit spike; the production engine, routes, cache, and player integration are still not implemented.
-- Files/artifacts changed: `tools/engine-spike/src/main.rs`, `docs/engine-spike.md`, `docs/r3-continuation.md`, `docs/adr/0003-bittorrent-engine-selection.md`, this plan.
-- Commands/tests run: Docker release build; uTP-only probe; DHT bootstrap/client probe; final `cargo fmt --check`, `cargo clippy --locked --release -- -D warnings`, Compose config, shell syntax, and `git diff --check` checks.
-- Evidence and results: `/tmp/rustorr-engine-spike/20260920T171757Z/probe.json` shows `live_utp=1`, `live_tcp=0` and the expected digest; `/tmp/rustorr-engine-spike/dht-two-peer-20260921T172000Z/client.json` shows `routing_table_size=58`, `outstanding_requests=41` and the expected digest; `/tmp/rustorr-engine-spike/persistence-restore-20260921T170500Z/` shows that moving the output causes a fresh peer fetch; `/tmp/rustorr-engine-spike/repeat-20260921T170700Z/` contains correct digests for the repeat matrix and resource samples.
-- Decisions: DHT bootstrap and uTP transfer are evidenced; PEX exchange is not evidenced; ADR 0003 remains `proposed`; persistence relocation is a negative result; engine timings are repeatability evidence only and are not R1 HTTP/player parity.
-- Open risks/questions: tracker-hidden two-peer PEX exchange, product-level cache eviction semantics, and an explicit engine-to-R1 metric comparison remain open.
-- Exact next action: build the tracker-hidden PEX probe; define the cache-eviction seam independently of librqbit's missing piece-eviction API; define the comparison to R1 metrics; then make the adopt/fork/reject decision in ADR 0003.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, current working tree after the R3 capability/repeat changes, raw artifacts under `/tmp/rustorr-engine-spike/`.
+### Handoff 2026-09-21 — гейты DHT и uTP R3
+- Статус: in progress
+- Выполненная цель: закрыты гейты изолированного обнаружения через DHT bootstrap и реальной передачи через uTP для spike librqbit; production-движок, маршруты, кэш и интеграция с плеером всё ещё не реализованы.
+- Изменённые файлы/артефакты: `tools/engine-spike/src/main.rs`, `docs/engine-spike.md`, `docs/r3-continuation.md`, `docs/adr/0003-bittorrent-engine-selection.md`, этот план.
+- Выполненные команды/тесты: release-сборка в Docker; проба только с uTP; проба DHT bootstrap/клиент; финальные проверки `cargo fmt --check`, `cargo clippy --locked --release -- -D warnings`, конфигурации Compose, синтаксиса shell и `git diff --check`.
+- Доказательства и результаты: `/tmp/rustorr-engine-spike/20260920T171757Z/probe.json` показывает `live_utp=1`, `live_tcp=0` и ожидаемый дайджест; `/tmp/rustorr-engine-spike/dht-two-peer-20260921T172000Z/client.json` показывает `routing_table_size=58`, `outstanding_requests=41` и ожидаемый дайджест; `/tmp/rustorr-engine-spike/persistence-restore-20260921T170500Z/` показывает, что перенос выходного каталога приводит к новой загрузке с пира; `/tmp/rustorr-engine-spike/repeat-20260921T170700Z/` содержит корректные дайджесты матрицы повторов и замеры ресурсов.
+- Решения: DHT bootstrap и передача через uTP подтверждены; обмен PEX не подтверждён; ADR 0003 остаётся `proposed`; перенос сохранения — отрицательный результат; тайминги движка — только доказательство повторяемости, а не паритет HTTP/плеера R1.
+- Открытые риски/вопросы: обмен PEX между двумя пирами со скрытым трекером, семантика вытеснения кэша на уровне продукта и явное сравнение метрик движка с R1 остаются открытыми.
+- Точное следующее действие: построить пробу PEX со скрытым трекером; определить seam вытеснения кэша независимо от отсутствующего в librqbit API вытеснения кусков; определить сравнение с метриками R1; затем принять решение adopt/fork/reject в ADR 0003.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, текущее рабочее дерево после изменений возможностей/повторов R3, сырые артефакты в `/tmp/rustorr-engine-spike/`.
 
-### Handoff 2026-09-21 — R3 complete
-- Status: done
-- Objective completed: closed the three remaining R3 gates — tracker-hidden peer exchange, the Rustorr cache-eviction seam, and the engine-to-R1 metric comparison — and recorded the engine decision. Production routes, cache and player integration remain unimplemented.
-- Files/artifacts changed: `tools/engine-spike/src/main.rs`, `tools/engine-spike/run.sh`, `docker-compose.r3-engine.yml`, `docs/adr/0003-bittorrent-engine-selection.md`, new `docs/adr/0004-cache-eviction-seam.md`, new `docs/engine-r1-metric-mapping.md`, `docs/engine-spike.md`, `docs/r3-continuation.md`, this plan.
-- Commands/tests run: Docker release build; `cargo fmt --check`; `cargo clippy --locked --release -- -D warnings`; Compose config validation; `sh -n tools/engine-spike/run.sh`; `git diff --check`; two `run.sh pex` runs plus a no-initial-peer control; two `--evict-after-read` probes.
-- Evidence and results: `/tmp/rustorr-engine-spike/pex-20260920T175048Z/` and `pex-20260920T175326Z/` — a client with session-level trackers and DHT disabled, LSD disabled and one initial peer discovered 3 unseen addresses and fetched `8,126,464` bytes / 31 pieces from the PEX-discovered Transmission seeder versus `262,144` bytes from its initial peer, returning the expected digest. Control `pex-control-20260920T174652Z/` found no peers and failed on the initialization deadline. `/tmp/rustorr-engine-spike/20260920T175558Z/` and `20260920T175634Z/` zeroed a verified 262,144-byte range under a live torrent; both re-reads returned the zeroed digest `8a39d2ab…` in `1.2 ms` and `0.9 ms` with no error and no re-fetch.
-- Decisions made: ADR 0003 is `accepted` — adopt `librqbit 9.0.1` behind the Rustorr adapter, with piece invalidation named as the single fork trigger. ADR 0004 is `accepted` — Rustorr owns the cache at the `StorageFactory`/`TorrentStorage` seam and evicts at torrent granularity, because piece-level removal under a live torrent silently corrupts reads. `docs/engine-r1-metric-mapping.md` fixes the rule that engine timings may rule a candidate out but never declare parity.
-- Defect found: `librqbit 9.0.1` accepts `AddTorrentOptions::disable_trackers` but never reads it; only `SessionOptions::disable_trackers` clears the tracker list. This invalidated the first PEX run, which the negative control caught. Worth reporting upstream; the adapter must assert isolation at session level.
-- Correction within the same session: the first three "slower than TorrServer" rows were comparisons between different quantities. Re-measured under R1's own protocol — seek after a warm-up read is `500.2 / 505.2 ms` against a `4512.8 ms` floor (`20260920T181105Z`, `20260920T181129Z`), magnet metadata resolution alone is `2855.9 ms` against `6058.5 ms` (`20260920T181310Z`). A defect in the spike was found while doing this: `initialized_ms` was computed at the end of the run and reported total run time; it now stops after `wait_until_initialized`, with a new `total_ms` and `warmup_read` beside it. Real initialization is `1.4 ms`.
-- Open risks/questions: no HTTP Range or player measurement exists for the candidate; the first read after a magnet resolution (`20597.9 ms`) and torrent-scoped re-fetch (`~20.1 s`) are unexplained and probably share a cause in peer re-acquisition; piece-level eviction stays impossible without an upstream change.
-- Exact next action: start R4 — production workspace, engine adapter, Rustorr-owned cache per ADR 0004, then run `tools/baseline/r1.sh` against the Rustorr HTTP surface.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, working tree after the R3 closure changes, Docker Compose baseline plus `docker-compose.r3-engine.yml`, raw artifacts under `/tmp/rustorr-engine-spike/`.
+### Handoff 2026-09-21 — R3 завершён
+- Статус: done
+- Выполненная цель: закрыты три оставшихся гейта R3 — peer exchange со скрытым трекером, seam вытеснения кэша Rustorr и сравнение метрик движка с R1 — и записано решение по движку. Production-маршруты, кэш и интеграция с плеером остаются нереализованными.
+- Изменённые файлы/артефакты: `tools/engine-spike/src/main.rs`, `tools/engine-spike/run.sh`, `docker-compose.r3-engine.yml`, `docs/adr/0003-bittorrent-engine-selection.md`, новый `docs/adr/0004-cache-eviction-seam.md`, новый `docs/engine-r1-metric-mapping.md`, `docs/engine-spike.md`, `docs/r3-continuation.md`, этот план.
+- Выполненные команды/тесты: release-сборка в Docker; `cargo fmt --check`; `cargo clippy --locked --release -- -D warnings`; валидация конфигурации Compose; `sh -n tools/engine-spike/run.sh`; `git diff --check`; два прогона `run.sh pex` плюс контроль без начального пира; две пробы `--evict-after-read`.
+- Доказательства и результаты: `/tmp/rustorr-engine-spike/pex-20260920T175048Z/` и `pex-20260920T175326Z/` — клиент с отключёнными на уровне сессии трекерами и DHT, отключённым LSD и одним начальным пиром обнаружил 3 неизвестных адреса и загрузил `8,126,464` байт / 31 кусок с найденного через PEX сидера Transmission против `262,144` байт от начального пира, вернув ожидаемый дайджест. Контроль `pex-control-20260920T174652Z/` не нашёл пиров и упал по дедлайну инициализации. `/tmp/rustorr-engine-spike/20260920T175558Z/` и `20260920T175634Z/` обнулили проверенный диапазон 262,144 байт под живым торрентом; оба повторных чтения вернули дайджест обнулённых данных `8a39d2ab…` за `1.2 ms` и `0.9 ms` без ошибки и без повторной загрузки.
+- Принятые решения: ADR 0003 `accepted` — принять `librqbit 9.0.1` за адаптером Rustorr с инвалидацией кусков как единственным триггером форка. ADR 0004 `accepted` — Rustorr владеет кэшем на seam `StorageFactory`/`TorrentStorage` и вытесняет с гранулярностью торрента, потому что удаление кусков под живым торрентом молча портит чтение. `docs/engine-r1-metric-mapping.md` закрепляет правило: тайминги движка могут исключить кандидата, но никогда не объявляют паритет.
+- Найденный дефект: `librqbit 9.0.1` принимает `AddTorrentOptions::disable_trackers`, но никогда его не читает; список трекеров очищает только `SessionOptions::disable_trackers`. Это сделало недействительным первый прогон PEX, что поймал отрицательный контроль. Стоит сообщить upstream; адаптер должен проверять изоляцию на уровне сессии.
+- Исправление в той же сессии: первые три строки «медленнее TorrServer» были сравнением разных величин. Перемер по собственному протоколу R1 — перемотка после прогревочного чтения `500.2 / 505.2 ms` против порога `4512.8 ms` (`20260920T181105Z`, `20260920T181129Z`), только получение метаданных magnet `2855.9 ms` против `6058.5 ms` (`20260920T181310Z`). При этом найден дефект spike: `initialized_ms` вычислялся в конце прогона и показывал общее время прогона; теперь он останавливается после `wait_until_initialized`, а рядом добавлены `total_ms` и `warmup_read`. Реальная инициализация — `1.4 ms`.
+- Открытые риски/вопросы: для кандидата нет замеров HTTP Range или плеера; первое чтение после получения magnet (`20597.9 ms`) и повторная загрузка на уровне торрента (`~20.1 s`) не объяснены и, вероятно, имеют общую причину в повторном поиске пиров; вытеснение на уровне кусков остаётся невозможным без upstream-изменения.
+- Точное следующее действие: начать R4 — production workspace, адаптер движка, принадлежащий Rustorr кэш по ADR 0004, затем прогнать `tools/baseline/r1.sh` против HTTP-поверхности Rustorr.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, рабочее дерево после изменений закрытия R3, baseline Docker Compose плюс `docker-compose.r3-engine.yml`, сырые артефакты в `/tmp/rustorr-engine-spike/`.
 
-### Handoff 2026-09-21 — R4 steps 1–7
-- Status: in progress
-- Objective completed: the architectural skeleton up to a running server. Six-crate workspace with enforced boundaries, engine adapter and cache bridge, Rustorr-owned cache with two-phase eviction, SQLite state (schema v1), HTTP skeleton, and the `rustorr` binary with configuration, ordered startup and shutdown. Steps 8 (Docker, smoke, `x86_64`, R2 against the skeleton) and 9 (ADR 0005/0006, architecture document) remain.
-- Files/artifacts changed: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `crates/` (six crates), `tools/r4.sh`, `tools/r4/` (`Dockerfile.dev`, `check-boundaries.py`), `.gitignore`, `docs/r4-plan.md`, `docs/r4-continuation.md`, this plan, `docs/r3-continuation.md`.
-- Commands/tests run: `tools/r4.sh check` (exit 0, 165 tests); `tools/r4.sh build` (release, exit 0); a manual run of the release binary with `curl`, `SIGTERM` and log inspection; mutation checks per step; stability loops for the tests that use sockets and processes (HTTP 0 failures in 100 runs, process tests 0 in 15). `tools/r4.sh boundaries` includes negative tests of its own guards.
-- Evidence and results: per-step evidence is in [`docs/r4-plan.md`](r4-plan.md). Key results: five end-to-end tests run two real librqbit sessions on loopback and confirm the strict-storage contract (initial check survives an empty cache, `create` re-attaches, delete → `Cache::remove` → re-add refetches, a retained cache serves a file with no peer); process tests confirm signal handling, shutdown order, restart on the same data directory and failure exit codes.
-- Decisions made: features `rust-tls` for librqbit (OpenSSL out of the tree, guarded on every target); eviction is two-phase and driven from outside the cache; the cache limit is soft for torrents being watched; state in SQLite with `user_version` and `application_id`; settings stored as one verbatim JSON document; the wrong method on a known path is a 404 with no `Allow`, as in the reference; access layers are not created as empty placeholders; graceful shutdown is bounded by `--shutdown-grace`; the server runs on an explicit multi-thread runtime.
-- Errors found and fixed during the work: a hand-computed `application_id` literal that disagreed with its constant; an unstable log test written in step 6 and declared green after one run (9 failures in 60 parallel runs, fixed to 0 in 100); a measurement loop that mounted the build volume at the wrong path and reported 15/15 failures that were not real. Two mutation runs were first invalid because the mutated code did not compile.
-- Open risks/questions: the `x86_64` build of `aws-lc-sys` and bundled SQLite has not been attempted (native `aarch64` only); the `/echo` response format is from memory of the TorrServer API, not from the R2 corpus (the user accepted this as an assumption on 2026-09-21, to be closed by capturing the scenario from the reference); the `data` catalog column, the `timecode` type and the panic `500` body are assumptions; whether the engine really stops its tasks is observable only through our own log order; the R3 performance gates ran on the OpenSSL SHA-1 build while the shipped build uses `aws-lc-rs`.
-- Exact next action: step 8, first item — check that `aws-lc-sys` and SQLite cross-build for `x86_64-unknown-linux-gnu`, then write the `Dockerfile`, then the smoke command. Full list in [`docs/r4-continuation.md`](r4-continuation.md).
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, branch `r3-engine-spike`, HEAD `761589a` with an uncommitted working tree (the user declined a commit on 2026-09-21); Docker image `rustorr-r4-dev`, volumes `rustorr-r4-target` and `rustorr-r4-cargo`; host is `arm64` without a Rust toolchain, so everything runs through `tools/r4.sh`.
+### Handoff 2026-09-21 — шаги 1–7 R4
+- Статус: in progress
+- Выполненная цель: архитектурный каркас до работающего сервера. Workspace из шести crate с проверяемыми границами, адаптер движка и мост кэша, принадлежащий Rustorr кэш с двухфазным вытеснением, состояние в SQLite (схема v1), HTTP-каркас и бинарник `rustorr` с конфигурацией, упорядоченным запуском и остановкой. Остаются шаги 8 (Docker, smoke, `x86_64`, R2 против каркаса) и 9 (ADR 0005/0006, архитектурный документ).
+- Изменённые файлы/артефакты: `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `crates/` (шесть crate), `tools/r4.sh`, `tools/r4/` (`Dockerfile.dev`, `check-boundaries.py`), `.gitignore`, `docs/r4-plan.md`, `docs/r4-continuation.md`, этот план, `docs/r3-continuation.md`.
+- Выполненные команды/тесты: `tools/r4.sh check` (exit 0, 165 тестов); `tools/r4.sh build` (release, exit 0); ручной запуск release-бинарника с `curl`, `SIGTERM` и просмотром логов; мутационные проверки на каждом шаге; циклы стабильности для тестов, использующих сокеты и процессы (HTTP — 0 сбоев на 100 прогонов, процессные тесты — 0 на 15). `tools/r4.sh boundaries` включает отрицательные тесты собственных проверок.
+- Доказательства и результаты: доказательства по шагам — в [`docs/r4-plan.md`](r4-plan.md). Ключевые результаты: пять сквозных тестов запускают две настоящие сессии librqbit на loopback и подтверждают контракт строгого хранилища (начальная проверка переживает пустой кэш, `create` подключается заново, удаление → `Cache::remove` → повторное добавление загружает заново, сохранённый кэш отдаёт файл без пира); процессные тесты подтверждают обработку сигналов, порядок остановки, перезапуск на том же каталоге данных и коды выхода при сбоях.
+- Принятые решения: feature `rust-tls` для librqbit (OpenSSL вне дерева, проверяется на каждой цели); вытеснение двухфазное и управляется извне кэша; лимит кэша мягкий для просматриваемых торрентов; состояние в SQLite с `user_version` и `application_id`; настройки хранятся одним дословным JSON-документом; неверный метод на известном пути — 404 без `Allow`, как в эталоне; слои доступа не создаются пустыми заглушками; корректная остановка ограничена `--shutdown-grace`; сервер работает на явном многопоточном runtime.
+- Ошибки, найденные и исправленные в ходе работы: вычисленный вручную литерал `application_id`, расходившийся со своей константой; нестабильный тест логов, написанный на шаге 6 и объявленный зелёным после одного прогона (9 сбоев на 60 параллельных прогонов, исправлено до 0 на 100); измерительный цикл, который монтировал том сборки по неверному пути и сообщал о 15/15 сбоях, которых на самом деле не было. Два мутационных прогона поначалу были недействительны, потому что изменённый код не компилировался.
+- Открытые риски/вопросы: сборка `aws-lc-sys` и встроенного SQLite под `x86_64` не проверялась (только нативный `aarch64`); формат ответа `/echo` взят по памяти об API TorrServer, а не из корпуса R2 (пользователь принял это как допущение 2026-09-21, которое закроется снятием сценария с эталона); колонка каталога `data`, тип `timecode` и тело паники `500` — допущения; действительно ли движок останавливает свои задачи, видно только по порядку наших собственных логов; гейты производительности R3 запускались на сборке с OpenSSL SHA-1, а поставляемая сборка использует `aws-lc-rs`.
+- Точное следующее действие: шаг 8, первый пункт — проверить кросс-сборку `aws-lc-sys` и SQLite для `x86_64-unknown-linux-gnu`, затем написать `Dockerfile`, затем команду smoke. Полный список — в [`docs/r4-continuation.md`](r4-continuation.md).
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, ветка `r3-engine-spike`, HEAD `761589a` с незакоммиченным рабочим деревом (пользователь отказался от commit 2026-09-21); Docker-образ `rustorr-r4-dev`, тома `rustorr-r4-target` и `rustorr-r4-cargo`; хост `arm64` без toolchain Rust, поэтому всё запускается через `tools/r4.sh`.
 
-### Handoff 2026-09-21 — R4 complete
-- Status: done
-- Objective completed: production skeleton is packaged for Linux arm64 and amd64, with a non-root runtime, lifecycle smoke and a captured R2 starting point; crate/state decisions and architecture are recorded.
-- Files/artifacts changed: `Dockerfile`, `.dockerignore`, `docker-compose.r4-smoke.yml`, `tools/r4.sh`, `tools/r4/Dockerfile.dev`, `/echo` contract scenario and response, ADR 0005/0006, `r4-architecture.md`, R4 documentation and this plan.
-- Commands/tests run: `tools/r4.sh check` (165 tests), `tools/r4.sh cross-build`, `tools/r4.sh smoke`; reference/candidate R2 capture and diff at `/tmp/rustorr-contract/r4-20260921/`.
-- Evidence and results: both production target images build; arm64 answers `/echo`, exits 0 after SIGTERM and restarts using the same SQLite volume. R2 captures `MatriX.145` from reference and Rustorr now matches it exactly; 25 differences are deliberate R6 routes.
-- Open risks/questions: R5 must connect the existing cache storage bridge to the engine and prove controlled eviction through HTTP/R1. R3 timing evidence used the OpenSSL SHA-1 build; R5 must measure the shipped aws-lc build. State fields `data`, `timecode` and panic-500 shape remain R6 contract questions.
-- Exact next action: implement R5 lifecycle coordinator, then run `tools/baseline/r1.sh` against Rustorr with deterministic eviction.
-- Starting directory/commit/config: `/Users/keito/Documents/pets/rustorr`, branch `r3-engine-spike`, HEAD `761589a`, intentionally uncommitted working tree; Docker development image `rustorr-r4-dev` and named volumes `rustorr-r4-target`, `rustorr-r4-cargo`.
+### Handoff 2026-09-21 — R4 завершён
+- Статус: done
+- Выполненная цель: production-каркас упакован для Linux arm64 и amd64 с runtime без root, smoke жизненного цикла и снятой отправной точкой R2; решения по crate/состоянию и архитектура записаны.
+- Изменённые файлы/артефакты: `Dockerfile`, `.dockerignore`, `docker-compose.r4-smoke.yml`, `tools/r4.sh`, `tools/r4/Dockerfile.dev`, контрактный сценарий и ответ `/echo`, ADR 0005/0006, `r4-architecture.md`, документация R4 и этот план.
+- Выполненные команды/тесты: `tools/r4.sh check` (165 тестов), `tools/r4.sh cross-build`, `tools/r4.sh smoke`; снимок и diff R2 эталона/кандидата в `/tmp/rustorr-contract/r4-20260921/`.
+- Доказательства и результаты: оба production-образа целей собираются; arm64 отвечает на `/echo`, завершается с кодом 0 после SIGTERM и перезапускается с тем же томом SQLite. R2 снимает `MatriX.145` с эталона, и Rustorr теперь точно ему соответствует; 25 различий — намеренно отложенные маршруты R6.
+- Открытые риски/вопросы: R5 должен подключить существующий мост хранилища кэша к движку и доказать контролируемое вытеснение через HTTP/R1. Доказательства таймингов R3 использовали сборку с OpenSSL SHA-1; R5 должен измерить поставляемую сборку с aws-lc. Поля состояния `data`, `timecode` и форма panic-500 остаются вопросами контракта R6.
+- Точное следующее действие: реализовать координатор жизненного цикла R5, затем прогнать `tools/baseline/r1.sh` против Rustorr с детерминированным вытеснением.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`, ветка `r3-engine-spike`, HEAD `761589a`, намеренно незакоммиченное рабочее дерево; Docker-образ для разработки `rustorr-r4-dev` и именованные тома `rustorr-r4-target`, `rustorr-r4-cargo`.

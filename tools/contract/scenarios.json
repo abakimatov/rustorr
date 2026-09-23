@@ -1,54 +1,275 @@
 {
-  "schema": "rustorr.r2.contract-scenarios.v1",
+  "schema": "rustorr.r6.contract-scenarios.v2",
   "reference": "TorrServer MatriX.145@2c7fa43b9ac64a9eda27314c0b6791518497f188",
   "defaults": {
     "torrent_link": "file:///fixtures/torrents/single.torrent",
     "torrent_hash": "68c3ccdd52b2925f4f97e2f61ea248e728e54cea",
+    "torrent_file": "/tmp/rustorr-contract/fixtures/torrents/single.torrent",
     "media_link": "file:///fixtures/torrents/unicode.torrent",
     "media_hash": "d272ca49e3f32a0a08c0c0599a0a9daa6bf5cb7d"
   },
   "normalization": {
-    "ignored_headers": ["date", "last-modified"],
-    "ignored_json_paths": ["timestamp", "half_open_peers", "pending_peers", "total_peers", "bytes_read", "bytes_read_data", "bytes_read_useful_data", "bytes_written", "chunks_read", "chunks_read_useful", "loaded_size", "pieces_dirtied_good", "preloaded_bytes"]
+    "headers": {
+      "date": "http-date",
+      "last-modified": "http-date"
+    },
+    "json_paths": [
+      "/timestamp",
+      "/*/timestamp",
+      "/loaded_size",
+      "/*/loaded_size",
+      "/download_speed",
+      "/*/download_speed",
+      "/upload_speed",
+      "/*/upload_speed",
+      "/total_peers",
+      "/*/total_peers",
+      "/pending_peers",
+      "/*/pending_peers",
+      "/active_peers",
+      "/*/active_peers",
+      "/connected_seeders",
+      "/*/connected_seeders",
+      "/half_open_peers",
+      "/*/half_open_peers",
+      "/bytes_written",
+      "/*/bytes_written",
+      "/bytes_written_data",
+      "/*/bytes_written_data",
+      "/bytes_read",
+      "/*/bytes_read",
+      "/bytes_read_data",
+      "/*/bytes_read_data",
+      "/bytes_read_useful_data",
+      "/*/bytes_read_useful_data",
+      "/chunks_written",
+      "/*/chunks_written",
+      "/chunks_read",
+      "/*/chunks_read",
+      "/chunks_read_useful",
+      "/*/chunks_read_useful",
+      "/chunks_read_wasted",
+      "/*/chunks_read_wasted",
+      "/pieces_dirtied_good",
+      "/*/pieces_dirtied_good",
+      "/pieces_dirtied_bad",
+      "/*/pieces_dirtied_bad",
+      "/preloaded_bytes",
+      "/*/preloaded_bytes",
+      "/Torrent/preloaded_bytes",
+      "/Filled",
+      "/Pieces/*/Size"
+    ]
   },
+  "global_setup": [
+    {"id": "global-settings-defaults", "method": "POST", "path": "/settings", "json": {"action": "def"}, "auth": true, "expect_status": 200},
+    {"id": "global-waf-clear", "method": "POST", "path": "/waf", "json": {"whitelist": "", "blacklist": "", "referers": ""}, "auth": true, "expect_status": 200},
+    {"id": "global-viewed-single-clear", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${torrent_hash}", "file_index": -1}, "auth": true, "expect_status": 200},
+    {"id": "global-viewed-media-clear", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${media_hash}", "file_index": -1}, "auth": true, "expect_status": 200},
+    {"id": "global-torrents-wipe", "method": "POST", "path": "/torrents", "json": {"action": "wipe"}, "auth": true, "expect_status": 200}
+  ],
+  "default_setup": [
+    {"id": "isolation-viewed-single-before", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${torrent_hash}", "file_index": -1}, "auth": true, "expect_status": 200},
+    {"id": "isolation-viewed-media-before", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${media_hash}", "file_index": -1}, "auth": true, "expect_status": 200},
+    {"id": "isolation-drop-single-before", "method": "POST", "path": "/torrents", "json": {"action": "drop", "hash": "${torrent_hash}"}, "auth": true, "expect_status": 200},
+    {"id": "isolation-rem-single-before", "method": "POST", "path": "/torrents", "json": {"action": "rem", "hash": "${torrent_hash}"}, "auth": true, "expect_status": 200},
+    {"id": "isolation-drop-media-before", "method": "POST", "path": "/torrents", "json": {"action": "drop", "hash": "${media_hash}"}, "auth": true, "expect_status": 200},
+    {"id": "isolation-rem-media-before", "method": "POST", "path": "/torrents", "json": {"action": "rem", "hash": "${media_hash}"}, "auth": true, "expect_status": 200}
+  ],
+  "default_teardown": [
+    {"id": "isolation-drop-single-after", "method": "POST", "path": "/torrents", "json": {"action": "drop", "hash": "${torrent_hash}"}, "auth": true, "expect_status": 200},
+    {"id": "isolation-rem-single-after", "method": "POST", "path": "/torrents", "json": {"action": "rem", "hash": "${torrent_hash}"}, "auth": true, "expect_status": 200},
+    {"id": "isolation-drop-media-after", "method": "POST", "path": "/torrents", "json": {"action": "drop", "hash": "${media_hash}"}, "auth": true, "expect_status": 200},
+    {"id": "isolation-rem-media-after", "method": "POST", "path": "/torrents", "json": {"action": "rem", "hash": "${media_hash}"}, "auth": true, "expect_status": 200}
+  ],
+  "global_teardown": [
+    {"id": "global-waf-clear-after", "method": "POST", "path": "/waf", "json": {"whitelist": "", "blacklist": "", "referers": ""}, "auth": true, "expect_status": 200},
+    {"id": "global-settings-defaults-after", "method": "POST", "path": "/settings", "json": {"action": "def"}, "auth": true, "expect_status": 200}
+  ],
   "scenarios": [
-    {"id": "echo", "area": "access", "classification": "required", "method": "GET", "path": "/echo"},
-    {"id": "torrents-list", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "list"}},
-    {"id": "torrents-invalid-json", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "raw_body": "{", "content_type": "application/json"},
-    {"id": "torrents-wipe", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "wipe"}},
-    {"id": "torrents-add-known", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}"}},
-    {"id": "torrents-add-media", "area": "api", "classification": "required", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}"}},
-    {"id": "settings-get", "area": "settings", "classification": "required", "method": "GET", "path": "/settings"},
-    {"id": "settings-authenticated", "area": "access", "classification": "required", "method": "GET", "path": "/settings", "auth": true},
-    {"id": "settings-list", "area": "settings", "classification": "required", "method": "POST", "path": "/settings", "json": {"action": "get"}},
-    {"id": "cache-get", "area": "cache", "classification": "required", "method": "GET", "path": "/cache"},
-    {"id": "cache-list", "area": "cache", "classification": "required", "method": "POST", "path": "/cache", "json": {"action": "list"}},
-    {"id": "viewed-get", "area": "viewed", "classification": "required", "method": "GET", "path": "/viewed"},
-    {"id": "viewed-list", "area": "viewed", "classification": "required", "method": "POST", "path": "/viewed", "json": {"action": "list"}},
-    {"id": "stream-get", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play"},
-    {"id": "stream-head", "area": "stream", "classification": "required", "method": "HEAD", "path": "/stream?link=${torrent_link}&index=1&play"},
-    {"id": "stream-range", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play", "headers": {"Range": "bytes=0-65535"}},
-    {"id": "stream-suffix-range", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play", "headers": {"Range": "bytes=-65536"}},
-    {"id": "stream-open-range", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play", "headers": {"Range": "bytes=65536-"}},
-    {"id": "stream-multiple-range", "area": "stream", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play", "headers": {"Range": "bytes=0-10,20-30"}},
-    {"id": "play-known", "area": "stream", "classification": "required", "method": "GET", "path": "/play?link=${torrent_link}&index=1"},
-    {"id": "playlist-all", "area": "playlist", "classification": "required", "method": "GET", "path": "/playlist"},
-    {"id": "playlist-item", "area": "playlist", "classification": "required", "method": "GET", "path": "/playlist/${torrent_hash}"},
-    {"id": "m3u-known", "area": "playlist", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&m3u"},
-    {"id": "m3u-forkplayer", "area": "playlist", "classification": "capability-specific", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&m3u&fn=file.m3u"},
-    {"id": "m3u-media", "area": "playlist", "classification": "required", "method": "GET", "path": "/stream?link=${media_link}&index=1&m3u"},
-    {"id": "m3u-media-forkplayer", "area": "playlist", "classification": "capability-specific", "method": "GET", "path": "/stream?link=${media_link}&index=1&m3u&fn=file.m3u"},
-    {"id": "search", "area": "search", "classification": "capability-specific", "method": "GET", "path": "/search?query=rustorr"},
-    {"id": "storage", "area": "storage", "classification": "capability-specific", "method": "GET", "path": "/storage"},
-    {"id": "tmdb", "area": "tmdb", "classification": "capability-specific", "method": "GET", "path": "/tmdb?query=rustorr"},
-    {"id": "gstreamer", "area": "gstreamer", "classification": "capability-specific", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&gstreamer", "headers": {"Range": "bytes=0-65535"}},
-    {"id": "ffprobe", "area": "ffprobe", "classification": "capability-specific", "method": "GET", "path": "/ffprobe?link=${torrent_link}&index=1"},
-    {"id": "cors-preflight", "area": "access", "classification": "required", "method": "OPTIONS", "path": "/torrents", "headers": {"Origin": "https://client.invalid", "Access-Control-Request-Method": "POST"}},
-    {"id": "forwarded-url", "area": "access", "classification": "required", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&m3u", "headers": {"X-Forwarded-Host": "proxy.invalid", "X-Forwarded-Proto": "https"}},
-    {"id": "mcp-initialize", "area": "mcp", "classification": "capability-specific", "method": "POST", "path": "/mcp", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "rustorr-r2", "version": "1"}}}},
-    {"id": "webdav-options", "area": "webdav", "classification": "capability-specific", "method": "OPTIONS", "path": "/webdav/"},
-    {"id": "dlna-root", "area": "dlna", "classification": "capability-specific", "method": "GET", "path": "/dlna"},
-    {"id": "fuse-route", "area": "fuse", "classification": "capability-specific", "method": "GET", "path": "/fuse"},
-    {"id": "missing-route", "area": "errors", "classification": "required", "method": "GET", "path": "/r2-route-that-does-not-exist"}
+    {"id": "echo", "area": "access", "classification": "core", "method": "GET", "path": "/echo"},
+    {"id": "missing-route", "area": "errors", "classification": "core", "method": "GET", "path": "/r6-route-that-does-not-exist"},
+    {"id": "torrents-list-empty", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "list"}},
+    {"id": "torrents-invalid-json", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "raw_body": "{", "content_type": "application/json"},
+    {"id": "torrents-unknown-action", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "unknown"}},
+    {"id": "torrents-add-unsaved", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}"}},
+    {"id": "torrents-add-saved", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true, "title": "R6 fixture", "category": "contract", "data": "opaque"}},
+    {
+      "id": "torrents-get-known", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "get", "hash": "${torrent_hash}"},
+      "setup": [
+        {"id": "add-known", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-known", "wait_for_metadata": "${torrent_hash}", "require_data": true}
+      ]
+    },
+    {
+      "id": "torrents-set", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "set", "hash": "${torrent_hash}", "title": "Changed title", "category": "changed", "data": "data"},
+      "setup": [
+        {"id": "add-before-set", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-before-set", "wait_for_metadata": "${torrent_hash}"}
+      ]
+    },
+    {
+      "id": "torrents-set-readback", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "get", "hash": "${torrent_hash}"},
+      "setup": [
+        {"id": "add-before-set-readback", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-before-set-readback", "wait_for_metadata": "${torrent_hash}"},
+        {"id": "set-before-readback", "method": "POST", "path": "/torrents", "json": {"action": "set", "hash": "${torrent_hash}", "title": "Changed title", "category": "changed", "data": "data"}, "auth": true, "expect_status": 200}
+      ]
+    },
+    {
+      "id": "torrents-drop", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "drop", "hash": "${torrent_hash}"},
+      "setup": [
+        {"id": "add-before-drop", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-before-drop", "wait_for_metadata": "${torrent_hash}"}
+      ]
+    },
+    {
+      "id": "torrents-drop-catalog", "area": "torrents", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "list"},
+      "setup": [
+        {"id": "add-before-drop-list", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-before-drop-list", "wait_for_metadata": "${torrent_hash}", "require_data": true},
+        {"id": "drop-before-list", "method": "POST", "path": "/torrents", "json": {"action": "drop", "hash": "${torrent_hash}"}, "auth": true, "expect_status": 200}
+      ]
+    },
+    {
+      "id": "torrents-rem-viewed-retained", "area": "torrents", "classification": "core", "method": "POST", "path": "/viewed", "json": {"action": "list", "hash": "${torrent_hash}"},
+      "setup": [
+        {"id": "add-before-rem", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-before-rem", "wait_for_metadata": "${torrent_hash}"},
+        {"id": "viewed-before-rem", "method": "POST", "path": "/viewed", "json": {"action": "set", "hash": "${torrent_hash}", "file_index": 1, "timecode": 42.5}, "auth": true, "expect_status": 200},
+        {"id": "rem-before-viewed", "method": "POST", "path": "/torrents", "json": {"action": "rem", "hash": "${torrent_hash}"}, "auth": true, "expect_status": 200}
+      ],
+      "teardown": [
+        {"id": "clear-retained-viewed", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${torrent_hash}", "file_index": -1}, "auth": true, "expect_status": 200}
+      ]
+    },
+    {"id": "torrent-upload", "area": "upload", "classification": "core", "method": "POST", "path": "/torrent/upload", "multipart": {"fields": {"save": "1", "title": "Uploaded fixture"}, "files": [{"field": "file", "path": "${torrent_file}", "content_type": "application/x-bittorrent"}]}},
+    {
+      "id": "settings-get", "area": "settings", "classification": "core", "method": "POST", "path": "/settings", "json": {"action": "get"},
+      "setup": [{"id": "settings-default-before-get", "method": "POST", "path": "/settings", "json": {"action": "def"}, "auth": true, "expect_status": 200}]
+    },
+    {
+      "id": "settings-set", "area": "settings", "classification": "core", "method": "POST", "path": "/settings", "json": {"action": "set", "sets": {"CacheSize": 67108864, "ReaderReadAHead": 75, "PreloadCache": 25, "UseDisk": false, "TorrentsSavePath": "", "RemoveCacheOnDrop": true, "ForceEncrypt": false, "RetrackersMode": 1, "TrackersListURL": "", "DefaultTrackers": "", "TorrentDisconnectTimeout": 30, "EnableDebug": false, "EnableDLNA": false, "EnableBonjour": true, "FriendlyName": "", "EnableRutorSearch": false, "EnableTorznabSearch": false, "TorznabUrls": null, "TMDBSettings": {"APIKey": "", "APIURL": "https://api.themoviedb.org", "ImageURL": "https://image.tmdb.org", "ImageURLRu": "https://imagetmdb.com"}, "EnableIPv6": false, "DisableTCP": false, "DisableUTP": false, "DisableUPNP": false, "DisableDHT": false, "DisablePEX": false, "DisableUpload": false, "DownloadRateLimit": 0, "UploadRateLimit": 0, "ConnectionsLimit": 25, "PeersListenPort": 0, "EnableLPD": true, "LPDIPv6": false, "SslPort": 0, "SslCert": "", "SslKey": "", "ResponsiveMode": true, "ShowFSActiveTorr": true, "StoreSettingsInJson": true, "StoreViewedInJson": false, "TrackTimecode": true, "MergeAllM3U": false}},
+      "teardown": [{"id": "settings-default-after-set", "method": "POST", "path": "/settings", "json": {"action": "def"}, "auth": true, "expect_status": 200}]
+    },
+    {
+      "id": "settings-change-unloads-live", "area": "settings", "classification": "core", "method": "POST", "path": "/torrents", "json": {"action": "list"},
+      "setup": [
+        {"id": "add-unsaved-before-settings", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}"}, "auth": true, "expect_status": 200},
+        {"id": "add-saved-before-settings", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-unsaved-before-settings", "wait_for_metadata": "${torrent_hash}"},
+        {"id": "wait-saved-before-settings", "wait_for_metadata": "${media_hash}", "require_data": true},
+        {"id": "settings-change", "method": "POST", "path": "/settings", "json": {"action": "def"}, "auth": true, "expect_status": 200}
+      ]
+    },
+    {
+      "id": "viewed-set-list", "area": "viewed", "classification": "core", "method": "POST", "path": "/viewed", "json": {"action": "list", "hash": "${torrent_hash}"},
+      "setup": [{"id": "set-viewed", "method": "POST", "path": "/viewed", "json": {"action": "set", "hash": "${torrent_hash}", "file_index": 1, "timecode": 12.25}, "auth": true, "expect_status": 200}],
+      "teardown": [{"id": "remove-viewed", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${torrent_hash}", "file_index": -1}, "auth": true, "expect_status": 200}]
+    },
+    {
+      "id": "viewed-head-side-effect", "area": "viewed", "classification": "core", "method": "POST", "path": "/viewed", "json": {"action": "list", "hash": "${torrent_hash}"},
+      "setup": [
+        {"id": "add-before-head", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-before-head", "wait_for_torrent": "${torrent_hash}"},
+        {"id": "clear-probe-viewed", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${torrent_hash}", "file_index": -1}, "auth": true, "expect_status": 200},
+        {"id": "head-before-viewed", "method": "HEAD", "path": "/play/${torrent_hash}/1", "expect_status": 200}
+      ],
+      "teardown": [{"id": "clear-head-viewed", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${torrent_hash}", "file_index": -1}, "auth": true, "expect_status": 200}]
+    },
+    {
+      "id": "cache-get", "area": "cache", "classification": "core", "method": "POST", "path": "/cache", "json": {"action": "get", "hash": "${torrent_hash}"},
+      "setup": [
+        {"id": "add-before-cache", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-before-cache", "wait_for_torrent": "${torrent_hash}"},
+        {"id": "range-before-cache", "method": "GET", "path": "/play/${torrent_hash}/1", "headers": {"Range": "bytes=0-65535"}, "expect_status": 206}
+      ]
+    },
+    {
+      "id": "stream-head", "area": "raw-playback", "classification": "core", "method": "HEAD", "path": "/stream/single.bin?link=${torrent_hash}&index=1&play",
+      "setup": [{"id": "add-before-stream-head", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-stream-head", "wait_for_torrent": "${torrent_hash}"}]
+    },
+    {
+      "id": "stream-closed-range", "area": "raw-playback", "classification": "core", "method": "GET", "path": "/play/${torrent_hash}/1", "headers": {"Range": "bytes=0-65535"},
+      "setup": [{"id": "add-before-closed-range", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-closed-range", "wait_for_torrent": "${torrent_hash}"}]
+    },
+    {
+      "id": "stream-open-range", "area": "raw-playback", "classification": "core", "method": "GET", "path": "/play/${torrent_hash}/1", "headers": {"Range": "bytes=8323072-"},
+      "setup": [{"id": "add-before-open-range", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-open-range", "wait_for_torrent": "${torrent_hash}"}]
+    },
+    {
+      "id": "stream-suffix-range", "area": "raw-playback", "classification": "core", "method": "GET", "path": "/play/${torrent_hash}/1", "headers": {"Range": "bytes=-65536"},
+      "setup": [{"id": "add-before-suffix-range", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-suffix-range", "wait_for_torrent": "${torrent_hash}"}]
+    },
+    {
+      "id": "stream-multipart-range", "area": "raw-playback", "classification": "core", "method": "GET", "path": "/play/${torrent_hash}/1", "headers": {"Range": "bytes=0-10,20-30"},
+      "setup": [{"id": "add-before-multipart", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-multipart", "wait_for_torrent": "${torrent_hash}"}]
+    },
+    {
+      "id": "stream-unsatisfiable", "area": "raw-playback", "classification": "core", "method": "GET", "path": "/play/${torrent_hash}/1", "headers": {"Range": "bytes=99999999-"},
+      "setup": [{"id": "add-before-unsat", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-unsat", "wait_for_torrent": "${torrent_hash}"}]
+    },
+    {
+      "id": "stream-if-none-match", "area": "raw-playback", "classification": "core", "method": "GET", "path": "/play/${torrent_hash}/1", "headers": {"If-None-Match": "${fixture_etag}"},
+      "setup": [
+        {"id": "add-before-conditional", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200},
+        {"id": "wait-before-conditional", "wait_for_torrent": "${torrent_hash}"},
+        {"id": "head-for-etag", "method": "HEAD", "path": "/play/${torrent_hash}/1", "expect_status": 200, "capture": {"fixture_etag": {"header": "ETag"}}}
+      ]
+    },
+    {
+      "id": "m3u-unicode", "area": "playlist", "classification": "core", "method": "GET", "path": "/stream/%D0%9C%D0%B5%D0%B4%D0%B8%D0%B0.m3u?link=${media_link}&m3u&fn=file.m3u", "headers": {"Host": "contract.invalid:8090"},
+      "setup": [{"id": "add-before-unicode-m3u", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-unicode-m3u", "wait_for_metadata": "${media_hash}"}]
+    },
+    {
+      "id": "playlist-individual", "area": "playlist", "classification": "core", "method": "GET", "path": "/playlist/file.m3u?hash=${media_hash}&fromlast", "headers": {"Host": "contract.invalid:8090"},
+      "setup": [{"id": "add-before-individual-playlist", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-individual-playlist", "wait_for_metadata": "${media_hash}"}]
+    },
+    {
+      "id": "playlist-all", "area": "playlist", "classification": "core", "method": "GET", "path": "/playlistall/all.m3u", "headers": {"Host": "contract.invalid:8090"},
+      "setup": [{"id": "add-before-all-playlist", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}", "save_to_db": true, "category": "video"}, "auth": true, "expect_status": 200}, {"id": "wait-before-all-playlist", "wait_for_metadata": "${media_hash}"}]
+    },
+    {"id": "cors-preflight", "area": "access", "classification": "core", "method": "OPTIONS", "path": "/torrents", "headers": {"Origin": "https://client.invalid", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "Authorization, Content-Type", "Access-Control-Request-Private-Network": "true"}},
+    {"id": "waf-get", "area": "access", "classification": "core", "method": "GET", "path": "/waf"},
+    {
+      "id": "waf-warning", "area": "access", "classification": "core", "method": "GET", "path": "/waf",
+      "setup": [{"id": "set-invalid-waf", "method": "POST", "path": "/waf", "json": {"whitelist": "not-an-ip", "blacklist": "", "referers": ""}, "auth": true, "expect_status": 200}],
+      "teardown": [{"id": "clear-invalid-waf", "method": "POST", "path": "/waf", "json": {"whitelist": "", "blacklist": "", "referers": ""}, "auth": true, "expect_status": 200}]
+    },
+    {
+      "id": "waf-hot-reload", "area": "access", "classification": "core", "method": "GET", "path": "/echo", "headers": {"Referer": "https://blocked.invalid/watch"},
+      "setup": [{"id": "set-referer-waf", "method": "POST", "path": "/waf", "json": {"whitelist": "", "blacklist": "", "referers": "blocked.invalid"}, "auth": true, "expect_status": 200}],
+      "teardown": [{"id": "clear-referer-waf", "method": "POST", "path": "/waf", "json": {"whitelist": "", "blacklist": "", "referers": ""}, "auth": true, "expect_status": 200}]
+    },
+    {
+      "id": "forwarded-playlist-url", "area": "access", "classification": "core", "profiles": ["proxy"], "method": "GET", "path": "/playlist/file.m3u?hash=${media_hash}", "headers": {"Host": "media.example.invalid"},
+      "setup": [{"id": "add-before-proxy-playlist", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-proxy-playlist", "wait_for_metadata": "${media_hash}"}]
+    },
+    {"id": "auth-management-denied", "area": "access", "classification": "core", "profiles": ["auth"], "method": "POST", "path": "/settings", "json": {"action": "get"}},
+    {"id": "auth-management-accepted", "area": "access", "classification": "core", "profiles": ["auth"], "method": "POST", "path": "/settings", "json": {"action": "get"}, "auth": true},
+    {
+      "id": "auth-share-play", "area": "access", "classification": "core", "profiles": ["auth"], "method": "GET", "path": "/play/${torrent_hash}/1", "headers": {"Range": "bytes=0-31"},
+      "setup": [{"id": "auth-add-share", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "auth-wait-share", "wait_for_torrent": "${torrent_hash}"}]
+    },
+    {
+      "id": "auth-share-playlist", "area": "access", "classification": "core", "profiles": ["auth"], "method": "GET", "path": "/playlist/file.m3u?hash=${media_hash}", "headers": {"Host": "contract.invalid:8090"},
+      "setup": [{"id": "auth-add-playlist", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "auth-wait-playlist", "wait_for_metadata": "${media_hash}"}]
+    },
+    {"id": "auth-nonplay-stream-denied", "area": "access", "classification": "core", "profiles": ["auth"], "method": "GET", "path": "/stream?link=${torrent_hash}&stat"},
+    {"id": "deferred-search", "area": "search", "classification": "deferred", "method": "GET", "path": "/search?query=rustorr"},
+    {"id": "deferred-storage", "area": "storage", "classification": "deferred", "method": "GET", "path": "/storage"},
+    {"id": "deferred-tmdb", "area": "tmdb", "classification": "deferred", "method": "GET", "path": "/tmdb?query=rustorr"},
+    {"id": "deferred-gstreamer", "area": "gstreamer", "classification": "deferred", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&gstreamer", "headers": {"Range": "bytes=0-65535"}},
+    {"id": "deferred-ffprobe", "area": "ffprobe", "classification": "deferred", "method": "GET", "path": "/ffprobe?link=${torrent_link}&index=1"},
+    {"id": "deferred-mcp", "area": "mcp", "classification": "deferred", "method": "POST", "path": "/mcp", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "rustorr-r6", "version": "1"}}}},
+    {"id": "deferred-webdav", "area": "webdav", "classification": "deferred", "method": "OPTIONS", "path": "/webdav/"},
+    {"id": "deferred-dlna", "area": "dlna", "classification": "deferred", "method": "GET", "path": "/dlna"},
+    {"id": "deferred-msx", "area": "msx", "classification": "deferred", "method": "GET", "path": "/msx/start.json"},
+    {"id": "deferred-shutdown", "area": "service", "classification": "deferred", "method": "POST", "path": "/shutdown"},
+    {"id": "deferred-download", "area": "service", "classification": "deferred", "method": "GET", "path": "/download/1"},
+    {
+      "id": "stream-get", "area": "raw-playback", "classification": "core", "method": "GET", "path": "/stream?link=${torrent_link}&index=1&play",
+      "setup": [{"id": "add-before-stream", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-before-stream", "wait_for_torrent": "${torrent_hash}"}]
+    }
   ]
 }

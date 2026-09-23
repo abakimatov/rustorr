@@ -2,109 +2,115 @@
 status: accepted
 ---
 
-# Rustorr owns cache eviction at the storage seam, at torrent granularity
+# Rustorr владеет вытеснением кэша на seam хранилища с гранулярностью торрента
 
-## Context
+## Контекст
 
-R1 defines a `seek-evicted` scenario, so Rustorr needs a cache with a
-deliberate eviction policy. The R3 spike established that `librqbit 9.0.1`
-exposes no public API for evicting an individual piece: `chunk_tracker`,
-`bitv` and the piece bookkeeping are private modules, and the only public
-lifecycle lever is `Session::delete` plus a re-add.
+R1 определяет сценарий `seek-evicted`, поэтому Rustorr нужен кэш с продуманной
+политикой вытеснения. Spike R3 установил, что `librqbit 9.0.1` не предоставляет
+публичного API для вытеснения отдельного куска: `chunk_tracker`, `bitv` и учёт
+кусков — приватные модули, а единственный публичный рычаг жизненного цикла —
+`Session::delete` с последующим повторным добавлением.
 
-Two probes decided the shape of the seam.
+Форму seam определили две пробы.
 
-**Torrent-scoped eviction works.** Run
-`/tmp/rustorr-engine-spike/20260920T164027Z` deleted the torrent with its
-files and re-added it; the re-fetched read returned the same bytes, with two
-storage creations, two initializations and two completed pieces. The re-fetch
-took about `20.1 s` against the local seeder.
+**Вытеснение на уровне торрента работает.** Прогон
+`/tmp/rustorr-engine-spike/20260920T164027Z` удалил торрент вместе с файлами и
+добавил его заново; чтение после повторной загрузки вернуло те же байты при
+двух созданиях хранилища, двух инициализациях и двух завершённых кусках.
+Повторная загрузка с локального сидера заняла около `20.1 s`.
 
-**Storage-scoped eviction under a live torrent is unsafe.** Runs
-`/tmp/rustorr-engine-spike/20260920T175558Z` and
-`/tmp/rustorr-engine-spike/20260920T175634Z` read 262,144 bytes at offset
-`4194304`, verified SHA-256
-`210ba6b19ee6a72f875261cd3a41d030fad18470c0fc633ee61b1a7d84174795`, then
-zeroed exactly that range on disk while the torrent stayed live, and read it
-again through the same handle. Both runs returned
-`8a39d2abd3999ab73c34db2476849cddf303ce389b35826850f9a700589b4a90` — the
-zeroed bytes — in `1.2 ms` and `0.9 ms`. The engine did not error and did not
-re-fetch: it trusts its in-memory have-bitfield and serves whatever the
-storage returns.
+**Вытеснение на уровне хранилища под живым торрентом небезопасно.** Прогоны
+`/tmp/rustorr-engine-spike/20260920T175558Z` и
+`/tmp/rustorr-engine-spike/20260920T175634Z` прочитали 262,144 байт по смещению
+`4194304`, проверили SHA-256
+`210ba6b19ee6a72f875261cd3a41d030fad18470c0fc633ee61b1a7d84174795`, затем
+обнулили ровно этот диапазон на диске, пока торрент оставался живым, и
+прочитали его снова через тот же handle. Оба прогона вернули
+`8a39d2abd3999ab73c34db2476849cddf303ce389b35826850f9a700589b4a90` — обнулённые
+байты — за `1.2 ms` и `0.9 ms`. Движок не выдал ошибку и не загрузил данные
+повторно: он доверяет своему have-bitfield в памяти и отдаёт то, что вернуло
+хранилище.
 
-That is the decisive constraint. Removing data underneath a live librqbit
-torrent produces silent corruption, not a cache miss.
+Это решающее ограничение. Удаление данных из-под живого торрента librqbit
+приводит к тихой порче данных, а не к промаху кэша.
 
-## Decision
+## Решение
 
-1. **Rustorr owns the cache; the engine does not.** The cache lives above the
-   engine at the public `StorageFactory` / `TorrentStorage` seam, which the
-   spike already exercises end to end (`creates`, `inits`, `reads`, `writes`,
+1. **Кэшем владеет Rustorr, а не движок.** Кэш находится над движком на
+   публичном seam `StorageFactory` / `TorrentStorage`, который spike уже
+   проверяет сквозным образом (`creates`, `inits`, `reads`, `writes`,
    `on_piece_completed`, `take`, `remove_file`).
-2. **Rustorr keeps its own residency index.** Piece residency is recorded from
-   `on_piece_completed` and the write path, so eviction policy never reads
-   engine internals and survives an engine swap.
-3. **Eviction granularity is the torrent, not the piece.** To evict, Rustorr
-   stops and deletes the torrent from the session, drops its storage, and
-   re-adds on the next request. Piece-level removal under a live torrent is
-   forbidden by invariant, because it is proven to corrupt reads silently.
-4. **The policy is a size-capped LRU over torrent-scoped entries with a pinned
-   read window.** A torrent with any live view is pinned and never evicted;
-   among unpinned entries the least-recently-read is evicted first until the
-   cache is under its cap.
-5. **`TorrentStorage::pread_exact` must fail loudly on a missing range.**
-   Rustorr's storage implementation returns an error rather than zeros if its
-   backing data is gone, so an invariant violation surfaces as a failed read
-   instead of corrupt media.
-6. **The escalation path is explicit.** If measurement in R5/R11 shows that
-   torrent-scoped eviction is too coarse — for example that a 100-view working
-   set thrashes on whole-torrent re-fetches — the remedy is an upstream change
-   exposing piece invalidation. That, and only that, is the condition that
-   turns the engine decision from `adopt` into `fork`.
+2. **Rustorr ведёт собственный индекс резидентности.** Резидентность кусков
+   фиксируется из `on_piece_completed` и пути записи, поэтому политика
+   вытеснения никогда не читает внутренности движка и переживает его замену.
+3. **Гранулярность вытеснения — торрент, а не кусок.** Чтобы вытеснить,
+   Rustorr останавливает и удаляет торрент из сессии, освобождает его хранилище
+   и добавляет заново при следующем запросе. Удаление отдельных кусков под
+   живым торрентом запрещено инвариантом, поскольку доказано, что оно молча
+   портит чтение.
+4. **Политика — LRU с ограничением размера над записями уровня торрента с
+   закреплённым окном чтения.** Торрент с любым живым просмотром закреплён и
+   никогда не вытесняется; среди незакреплённых записей первой вытесняется та,
+   что читалась давнее всего, пока кэш не окажется ниже лимита.
+5. **`TorrentStorage::pread_exact` обязан явно падать на отсутствующем
+   диапазоне.** Реализация хранилища Rustorr возвращает ошибку, а не нули, если
+   исходные данные пропали, поэтому нарушение инварианта проявляется как
+   неудачное чтение, а не как испорченное медиа.
+6. **Путь эскалации явный.** Если замеры в R5/R11 покажут, что вытеснение на
+   уровне торрента слишком грубое — например, рабочий набор из 100 просмотров
+   захлёбывается повторными загрузками целых торрентов, — решение —
+   upstream-изменение, открывающее инвалидацию кусков. Это и только это
+   условие переводит решение по движку из `adopt` в `fork`.
 
-## Consequences
+## Последствия
 
-- The measured torrent-scoped re-fetch cost of about `20.1 s` is the price of
-  an eviction miss today, so cap sizing and read-window pinning matter more
-  than eviction speed. R1's `seek-evicted` reference row is `8507.9 ms`; the
-  two are not like-for-like operations (see
-  [engine-r1-metric-mapping.md](../engine-r1-metric-mapping.md)), and the
-  comparable number can only be produced by R5 against Rustorr's HTTP surface.
-- R4 must expose the cache as an explicit component with its own residency
-  index and an eviction entry point, not as an incidental property of the
-  engine adapter.
-- R5 must run the R1 `seek-evicted` scenario against Rustorr with a
-  deterministic eviction trigger — something the R1 baseline could not do,
-  since TorrServer exposes no deterministic eviction API.
-- Rustorr's cache cap becomes a first-class configuration value with a
-  documented default, since it now directly determines eviction frequency.
+- Измеренная стоимость повторной загрузки на уровне торрента, около `20.1 s`,
+  — сегодняшняя цена промаха при вытеснении, поэтому выбор лимита и
+  закрепление окна чтения важнее скорости вытеснения. Эталонная строка R1
+  `seek-evicted` — `8507.9 ms`; это несопоставимые операции (см.
+  [engine-r1-metric-mapping.md](../engine-r1-metric-mapping.md)), и
+  сопоставимое число может дать только R5 на HTTP-поверхности Rustorr.
+- R4 должен представить кэш явным компонентом с собственным индексом
+  резидентности и точкой входа для вытеснения, а не побочным свойством адаптера
+  движка.
+- R5 должен прогнать сценарий R1 `seek-evicted` против Rustorr с
+  детерминированным триггером вытеснения — то, чего не мог baseline R1,
+  поскольку TorrServer не предоставляет детерминированного API вытеснения.
+- Лимит кэша Rustorr становится полноправным параметром конфигурации с
+  задокументированным значением по умолчанию, поскольку он теперь прямо
+  определяет частоту вытеснения.
 
-## R5 implementation note
+## Заметка о реализации в R5
 
-R5 installs the Rustorr `CacheStorageFactory` as librqbit's session storage
-factory and puts the deletion order in `TorrentCoordinator`: cancel and join
-prefetch, refuse a live playback pin, delete the live session, then remove its
-cache entry. A failed session delete leaves the engine registry, cache and
-catalog unchanged. Successful eviction saves live peer addresses for lazy
-re-add; ordinary product removal discards them. Disk cache recovery trusts an
-atomic manifest of extents and verified pieces, never sparse-file length.
-Forced eviction is reachable only through the benchmark-only Unix-socket
-control feature; it is not a production HTTP route.
+R5 устанавливает `CacheStorageFactory` Rustorr как фабрику хранилища сессии
+librqbit и закрепляет порядок удаления в `TorrentCoordinator`: отменить и
+дождаться prefetch, отказать при живом закреплении воспроизведения, удалить
+живую сессию, затем удалить её запись в кэше. Неудачное удаление сессии
+оставляет реестр движка, кэш и каталог без изменений. Успешное вытеснение
+сохраняет адреса живых пиров для ленивого повторного добавления; обычное
+продуктовое удаление их отбрасывает. Восстановление дискового кэша доверяет
+атомарному манифесту экстентов и проверенных кусков, но никогда — длине
+разреженного файла. Принудительное вытеснение доступно только через
+benchmark-only управляющую функцию на Unix-сокете; это не production
+HTTP-маршрут.
 
-Two complete R5 HTTP runs measured deterministic `seek-evicted` at
-`9075.955 ms` p95 with correct HTTP 206 payloads and no control failure. The
-metric intentionally has no parity floor, and this evidence does not activate
-the piece-invalidation fork trigger. R5 was closed by explicit product decision
-with the separate `netem-delay-loss` deviation recorded, not treated as a
-passing performance gate; see [`r5-continuation.md`](../r5-continuation.md).
+Два полных HTTP-прогона R5 измерили детерминированный `seek-evicted` в
+`9075.955 ms` p95 с корректными ответами HTTP 206 и без сбоев управления. У
+метрики намеренно нет порога паритета, и эти доказательства не активируют
+триггер форка с инвалидацией кусков. R5 закрыт явным продуктовым решением с
+зафиксированным отдельным отклонением `netem-delay-loss` и не считается
+пройденным гейтом производительности; см.
+[`r5-continuation.md`](../r5-continuation.md).
 
-## Alternatives considered
+## Рассмотренные альтернативы
 
-- **Piece-level LRU at the storage layer under a live torrent.** Rejected: two
-  probes show it silently returns wrong bytes.
-- **Fork librqbit now to expose piece invalidation.** Rejected for R3: there
-  is no evidence yet that torrent-scoped eviction is insufficient, and a fork
-  is a standing maintenance cost. Kept as the named escalation in decision 6.
-- **Delegate eviction to the engine.** Not possible in `9.0.1`; and it would
-  couple Rustorr's product behavior to engine internals, which is what the
-  adapter seam exists to prevent.
+- **LRU по кускам на уровне хранилища под живым торрентом.** Отклонено: две
+  пробы показывают, что он молча возвращает неверные байты.
+- **Форкнуть librqbit сейчас, чтобы открыть инвалидацию кусков.** Отклонено
+  для R3: пока нет доказательств, что вытеснения на уровне торрента
+  недостаточно, а форк — постоянные затраты на сопровождение. Сохранено как
+  названная эскалация в решении 6.
+- **Делегировать вытеснение движку.** Невозможно в `9.0.1`; к тому же это
+  связало бы продуктовое поведение Rustorr с внутренностями движка — именно
+  от этого защищает seam адаптера.

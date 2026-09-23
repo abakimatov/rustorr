@@ -9,7 +9,7 @@ pub(crate) const APPLICATION_ID: i32 = 0x5253_5452;
 /// Migrations in order; the position plus one is the schema version, kept in
 /// `PRAGMA user_version`. Applied migrations are never edited: a change to the
 /// schema is a new entry.
-pub(crate) const MIGRATIONS: &[&str] = &[V1];
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2];
 
 const V1: &str = "
 PRAGMA application_id = 1381192786; -- APPLICATION_ID, in decimal
@@ -41,6 +41,17 @@ CREATE TABLE viewed (
     timecode   REAL    NOT NULL DEFAULT 0,
     PRIMARY KEY (info_hash, file_index)
 ) STRICT, WITHOUT ROWID;
+";
+
+const V2: &str = "
+-- WAF configuration is normal application state. Account credentials are
+-- intentionally not here: accs.db remains a deployment secret.
+CREATE TABLE waf (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    whitelist TEXT NOT NULL DEFAULT '',
+    blacklist TEXT NOT NULL DEFAULT '',
+    referers  TEXT NOT NULL DEFAULT ''
+) STRICT;
 ";
 
 fn user_version(connection: &Connection) -> Result<u32, Error> {
