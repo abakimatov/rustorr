@@ -675,10 +675,32 @@ def main() -> None:
             if fixture_reset["status"] is None:
                 failures.append(f"{scenario['id']} fixture reset: {fixture_reset['error']}")
         setup_steps = [*manifest.get("default_setup", []), *scenario.get("setup", [])]
-        setup_results, setup_failures = run_steps(
-            args.base_url, setup_steps, variables, args.timeout, args.readiness_timeout, context
-        )
-        lifecycle.append({"scenario": scenario["id"], "phase": "setup", "steps": [summary(item) for item in setup_results]})
+        teardown_steps = [*scenario.get("teardown", []), *manifest.get("default_teardown", [])]
+        # The reference occasionally leaves a re-added torrent's peers pending
+        # for minutes. Setup is harness preparation, not the observed request,
+        # so a failed setup is cleaned up and repeated once; the attempt count
+        # is recorded, and a failure of the observed request is never retried.
+        for attempt in (1, 2):
+            setup_results, setup_failures = run_steps(
+                args.base_url, setup_steps, variables, args.timeout, args.readiness_timeout, context
+            )
+            lifecycle.append({
+                "scenario": scenario["id"],
+                "phase": "setup",
+                "attempt": attempt,
+                "steps": [summary(item) for item in setup_results],
+            })
+            if not setup_failures or attempt == 2:
+                break
+            retry_cleanup, _ = run_steps(
+                args.base_url, teardown_steps, variables, args.timeout, args.readiness_timeout, context
+            )
+            lifecycle.append({
+                "scenario": scenario["id"],
+                "phase": "setup-retry-cleanup",
+                "failures": setup_failures,
+                "steps": [summary(item) for item in retry_cleanup],
+            })
         failures.extend(f"{scenario['id']} setup: {failure}" for failure in setup_failures)
 
         case = request(args.base_url, scenario, variables, args.timeout, context)
@@ -687,7 +709,6 @@ def main() -> None:
         if case_failure:
             failures.append(case_failure)
 
-        teardown_steps = [*scenario.get("teardown", []), *manifest.get("default_teardown", [])]
         teardown_results, teardown_failures = run_steps(
             args.base_url, teardown_steps, variables, args.timeout, args.readiness_timeout, context
         )

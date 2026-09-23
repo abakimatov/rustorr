@@ -58,6 +58,24 @@ pub struct Config {
     )]
     pub trusted_proxies: Vec<IpNet>,
 
+    /// Never write to the database: settings, catalog, viewed and WAF changes
+    /// are refused or ignored, as with MatriX.145's read-only DB mode.
+    #[arg(long, env = "RUSTORR_READ_ONLY")]
+    pub read_only: bool,
+
+    /// Refuse to stream files larger than this, for example `20GiB`.
+    #[arg(long, env = "RUSTORR_MAX_STREAM_SIZE", value_parser = parse_size)]
+    pub max_stream_size: Option<u64>,
+
+    /// Add every `.torrent` file that appears in this directory to the
+    /// catalog, then delete the file.
+    #[arg(long, env = "RUSTORR_TORRENTS_DIR")]
+    pub torrents_dir: Option<PathBuf>,
+
+    /// Serve the search routes without HTTP authentication.
+    #[arg(long, env = "RUSTORR_SEARCH_WITHOUT_AUTH")]
+    pub search_without_auth: bool,
+
     /// Seconds to wait for open connections on shutdown before closing them.
     /// Keep it below the container runtime's stop timeout (10 s in Docker).
     #[arg(
@@ -144,6 +162,9 @@ mod tests {
         assert!(!config.disable_dht && !config.disable_trackers);
         assert!(!config.http_auth);
         assert_eq!(config.trusted_proxies.len(), 2);
+        assert!(!config.read_only && !config.search_without_auth);
+        assert_eq!(config.max_stream_size, None);
+        assert_eq!(config.torrents_dir, None);
         assert_eq!(config.shutdown_grace, Duration::from_secs(5));
         assert_eq!(config.log_format, LogFormat::Text);
     }
@@ -170,6 +191,12 @@ mod tests {
             "2",
             "--log-format",
             "json",
+            "--read-only",
+            "--max-stream-size",
+            "20GiB",
+            "--torrents-dir",
+            "/var/lib/rustorr/incoming",
+            "--search-without-auth",
         ]);
 
         assert_eq!(config.listen.port(), 9000);
@@ -182,6 +209,12 @@ mod tests {
         assert_eq!(config.trusted_proxies.len(), 2);
         assert_eq!(config.shutdown_grace, Duration::from_secs(2));
         assert_eq!(config.log_format, LogFormat::Json);
+        assert!(config.read_only && config.search_without_auth);
+        assert_eq!(config.max_stream_size, Some(20 << 30));
+        assert_eq!(
+            config.torrents_dir,
+            Some(PathBuf::from("/var/lib/rustorr/incoming"))
+        );
     }
 
     #[test]

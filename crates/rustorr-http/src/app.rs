@@ -39,7 +39,7 @@ use crate::{
     access::{HttpConfig, WafSnapshot},
     m3u,
     range::{self, ByteRange, RangeError},
-    web_api,
+    settings_api, web_api,
 };
 
 #[derive(Debug, Clone)]
@@ -87,12 +87,18 @@ pub fn router_with_core(info: ServerInfo, core: Arc<dyn ClientCore>, http: HttpC
         .route("/", get(web_api::root))
         .route("/magnets", get(web_api::magnets))
         .route("/stat", get(web_api::stat))
+        .route(
+            "/storage/settings",
+            get(settings_api::get_storage).post(settings_api::set_storage),
+        )
+        .route("/tmdb/settings", get(settings_api::tmdb))
         .route("/download/{size}", get(web_api::download))
         .route("/shutdown", get(web_api::shutdown))
         .route("/shutdown/{*reason}", get(web_api::shutdown))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(state.clone())
+        .layer(from_fn(head_only_where_routed))
         .layer(CatchPanicLayer::custom(panicked));
     Router::new()
         .fallback_service(routes)
@@ -274,7 +280,9 @@ pub(crate) fn management_authorized(state: &AppState, headers: &HeaderMap) -> bo
     state.http.authorized(headers)
 }
 
-async fn json_body<T: serde::de::DeserializeOwned>(request: Request<Body>) -> Result<T, ApiError> {
+pub(crate) async fn json_body<T: serde::de::DeserializeOwned>(
+    request: Request<Body>,
+) -> Result<T, ApiError> {
     let bytes = to_bytes(request.into_body(), 4 << 20)
         .await
         .map_err(|error| json_bad_request(error.to_string()))?;
@@ -288,7 +296,16 @@ async fn json_body<T: serde::de::DeserializeOwned>(request: Request<Body>) -> Re
     })
 }
 
-fn json_bad_request(message: impl Into<String>) -> ApiError {
+/// MatriX.145's answer to a write refused in read-only DB mode.
+pub(crate) fn read_only_refused() -> Response<Body> {
+    ApiError::Json {
+        status: StatusCode::FORBIDDEN,
+        message: "Read-only mode".into(),
+    }
+    .into_response()
+}
+
+pub(crate) fn json_bad_request(message: impl Into<String>) -> ApiError {
     ApiError::Json {
         status: StatusCode::BAD_REQUEST,
         message: message.into(),
@@ -299,7 +316,7 @@ pub(crate) fn lifecycle(error: impl std::fmt::Display) -> ApiError {
     json_bad_request(error.to_string())
 }
 
-fn json_response(value: impl Serialize) -> Result<Response<Body>, ApiError> {
+pub(crate) fn json_response(value: impl Serialize) -> Result<Response<Body>, ApiError> {
     let bytes = serde_json::to_vec(&value)
         .map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))?;
     Response::builder()
@@ -739,7 +756,22 @@ struct WafResponse {
     warnings: Vec<crate::access::WafWarning>,
 }
 
-fn waf_response(lists: WafLists) -> WafResponse {
+/// Go's `http.Error`: plain text with a trailing newline and `nosniff`.
+pub(crate) fn go_http_error(status: StatusCode, message: &str) -> Response<Body> {
+    let mut response = (
+        status,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        format!("{message}\n"),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+fn waf_response(lists: WafLists, read_only: bool) -> WafResponse {
     let snapshot = WafSnapshot::parse(lists.clone());
     WafResponse {
         whitelist: lists.whitelist,
@@ -747,7 +779,7 @@ fn waf_response(lists: WafLists) -> WafResponse {
         referers: lists.referers,
         ip_enabled: snapshot.ip_enabled(),
         referer_enabled: snapshot.referer_enabled(),
-        read_only: false,
+        read_only,
         warnings: snapshot.warnings,
     }
 }
@@ -764,7 +796,7 @@ async fn get_waf(
         .waf(WafCommand::Get)
         .await
         .map_err(|error| lifecycle(error).into_response())?;
-    json_response(waf_response(lists)).map_err(IntoResponse::into_response)
+    json_response(waf_response(lists, state.http.read_only)).map_err(IntoResponse::into_response)
 }
 
 async fn set_waf(
@@ -774,6 +806,9 @@ async fn set_waf(
 ) -> Result<Response<Body>, Response<Body>> {
     if !management_authorized(&state, &headers) {
         return Err(unauthorized());
+    }
+    if state.http.read_only {
+        return Err(read_only_refused());
     }
     let update: WafUpdate = json_body(request)
         .await
@@ -787,7 +822,7 @@ async fn set_waf(
         }))
         .await
         .map_err(|error| lifecycle(error).into_response())?;
-    json_response(waf_response(lists)).map_err(IntoResponse::into_response)
+    json_response(waf_response(lists, false)).map_err(IntoResponse::into_response)
 }
 
 async fn stream_root(
@@ -906,7 +941,14 @@ async fn stream_impl(
             .get("index")
             .and_then(|index| index.parse().ok())
             .unwrap_or(1);
-        return raw_playback(state.core, torrent, index, request).await;
+        return raw_playback(
+            state.core,
+            state.http.max_stream_size,
+            torrent,
+            index,
+            request,
+        )
+        .await;
     }
     Ok(StatusCode::OK.into_response())
 }
@@ -947,11 +989,12 @@ async fn play(
         Ok(TorrentReply::Torrent(Some(torrent))) => *torrent,
         _ => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
     };
-    raw_playback(state.core, torrent, id, request).await
+    raw_playback(state.core, state.http.max_stream_size, torrent, id, request).await
 }
 
 async fn raw_playback(
     core: Arc<dyn ClientCore>,
+    max_stream_size: Option<u64>,
     torrent: TorrentView,
     index: u32,
     request: Request<Body>,
@@ -967,6 +1010,12 @@ async fn raw_playback(
         .ok_or_else(|| {
             json_bad_request(format!("file with id {index} not found")).into_response()
         })?;
+    if let Some(limit) = max_stream_size.filter(|limit| file.length > *limit) {
+        return Err(go_http_error(
+            StatusCode::FORBIDDEN,
+            &format!("file size exceeded max allowed {limit} bytes"),
+        ));
+    }
     let etag = file_etag(hash, &file.path);
     let mime = mime_guess::from_path(&file.path)
         .first_or_octet_stream()
@@ -1460,6 +1509,24 @@ fn m3u_response(
         .header(header::CONTENT_LENGTH, body.len())
         .body(Body::from(body))
         .map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))
+}
+
+/// gin answers HEAD only where a route registers it (or `Any`); axum lets
+/// every GET route answer HEAD.
+async fn head_only_where_routed(request: Request<Body>, next: Next) -> Response<Body> {
+    if request.method() == Method::HEAD && !head_routed(request.uri().path()) {
+        return ApiError::NotFound.into_response();
+    }
+    next.run(request).await
+}
+
+fn head_routed(path: &str) -> bool {
+    let under = |prefix: &str| path == prefix || path.starts_with(&format!("{prefix}/"));
+    under("/stream")
+        || path.starts_with("/play/")
+        || under("/dav")
+        || under("/mcp")
+        || path == "/msx/proxy"
 }
 
 async fn not_found() -> ApiError {

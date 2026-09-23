@@ -199,6 +199,17 @@ impl ClientCore for InMemoryClientCore {
                 SettingsCommand::Get => {}
                 SettingsCommand::Set(settings) => state.settings = (*settings).normalized(),
                 SettingsCommand::Defaults => state.settings = Settings::default(),
+                SettingsCommand::SetStorage {
+                    settings_in_json,
+                    viewed_in_json,
+                } => {
+                    if let Some(value) = settings_in_json {
+                        state.settings.store_settings_in_json = value;
+                    }
+                    if let Some(value) = viewed_in_json {
+                        state.settings.store_viewed_in_json = value;
+                    }
+                }
             }
             Ok(state.settings.clone())
         })

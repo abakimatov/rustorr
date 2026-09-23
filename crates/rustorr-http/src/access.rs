@@ -71,6 +71,12 @@ pub struct HttpConfig {
     pub trusted_proxies: Vec<IpNet>,
     /// Signalled by `GET /shutdown`; the server stops as it does on SIGTERM.
     pub shutdown: Option<Arc<Notify>>,
+    /// Read-only DB mode: management writes are refused with 403.
+    pub read_only: bool,
+    /// Streams of larger files are refused with 403.
+    pub max_stream_size: Option<u64>,
+    /// Search routes skip HTTP authentication.
+    pub search_without_auth: bool,
 }
 
 impl Default for HttpConfig {
@@ -78,6 +84,9 @@ impl Default for HttpConfig {
         Self {
             credentials: None,
             shutdown: None,
+            read_only: false,
+            max_stream_size: None,
+            search_without_auth: false,
             trusted_proxies: vec![
                 "127.0.0.0/8".parse().expect("loopback CIDR"),
                 "::1/128".parse().expect("loopback CIDR"),

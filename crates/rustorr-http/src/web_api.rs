@@ -5,7 +5,7 @@ use async_stream::stream;
 use axum::{
     body::{Body, Bytes},
     extract::{Path, State},
-    http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Request, Response, StatusCode, header},
     response::IntoResponse,
 };
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -26,19 +26,10 @@ const QUERY: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'~');
 
-/// The reference routes these with GET only, so HEAD is a 404 there.
-fn head_not_routed(method: &Method) -> Option<Response<Body>> {
-    (method == Method::HEAD).then(|| ApiError::NotFound.into_response())
-}
-
 pub(crate) async fn magnets(
     State(state): State<AppState>,
-    method: Method,
     headers: HeaderMap,
 ) -> Result<Response<Body>, Response<Body>> {
-    if let Some(response) = head_not_routed(&method) {
-        return Err(response);
-    }
     if !management_authorized(&state, &headers) {
         return Err(unauthorized());
     }
@@ -90,9 +81,6 @@ pub(crate) async fn download(
     Path(size): Path<String>,
     request: Request<Body>,
 ) -> Result<Response<Body>, Response<Body>> {
-    if let Some(response) = head_not_routed(request.method()) {
-        return Err(response);
-    }
     if !management_authorized(&state, request.headers()) {
         return Err(unauthorized());
     }
@@ -216,12 +204,8 @@ fn multipart_zeros(ranges: &[ByteRange], length: u64) -> Response<Body> {
 /// the same per-torrent facts in its own words; no client parses this page.
 pub(crate) async fn stat(
     State(state): State<AppState>,
-    method: Method,
     headers: HeaderMap,
 ) -> Result<Response<Body>, Response<Body>> {
-    if let Some(response) = head_not_routed(&method) {
-        return Err(response);
-    }
     if !management_authorized(&state, &headers) {
         return Err(unauthorized());
     }
@@ -273,14 +257,18 @@ fn si_bytes(bytes: u64) -> String {
 
 pub(crate) async fn shutdown(
     State(state): State<AppState>,
-    method: Method,
+    reason: Option<Path<String>>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, Response<Body>> {
-    if let Some(response) = head_not_routed(&method) {
-        return Err(response);
-    }
     if !management_authorized(&state, &headers) {
         return Err(unauthorized());
+    }
+    // In read-only mode only a shutdown that names a reason is honoured.
+    let reason = reason
+        .map(|Path(reason)| reason.replace('/', ""))
+        .unwrap_or_default();
+    if state.http.read_only && reason.is_empty() {
+        return Err(StatusCode::FORBIDDEN.into_response());
     }
     if let Some(requested) = &state.http.shutdown {
         requested.notify_one();
@@ -292,12 +280,8 @@ pub(crate) async fn shutdown(
 /// reference's bundled web UI is intentionally not carried over.
 pub(crate) async fn root(
     State(state): State<AppState>,
-    method: Method,
     headers: HeaderMap,
 ) -> Result<Response<Body>, Response<Body>> {
-    if let Some(response) = head_not_routed(&method) {
-        return Err(response);
-    }
     if !management_authorized(&state, &headers) {
         return Err(unauthorized());
     }
@@ -315,6 +299,8 @@ mod tests {
     use axum::{Router, body::to_bytes};
     use rustorr_lifecycle::ClientCore;
     use tower::ServiceExt;
+
+    use axum::http::Method;
 
     use super::*;
     use crate::{HttpConfig, ServerInfo, app::tests::playback_app, router_with_core};
@@ -394,7 +380,15 @@ mod tests {
         assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
         assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */1048576");
 
-        for uri in ["/download/1", "/magnets", "/stat", "/"] {
+        for uri in [
+            "/download/1",
+            "/magnets",
+            "/stat",
+            "/",
+            "/storage/settings",
+            "/tmdb/settings",
+            "/settings",
+        ] {
             assert_eq!(
                 send(&app, Method::HEAD, uri, None).await.status(),
                 StatusCode::NOT_FOUND,
@@ -466,5 +460,125 @@ mod tests {
         assert_eq!(si_bytes(622_592), "623 kB");
         assert_eq!(si_bytes(4_692_251_852), "4.7 GB");
         assert_eq!(si_bytes(8_388_608), "8.4 MB");
+    }
+}
+
+#[cfg(test)]
+mod process_mode_tests {
+    use std::sync::Arc;
+
+    use axum::{
+        Router,
+        body::to_bytes,
+        http::{Method, header},
+    };
+    use rustorr_lifecycle::ClientCore;
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::{HttpConfig, ServerInfo, app::tests::playback_app, router_with_core};
+
+    fn app_with(config: HttpConfig) -> (Router, rustorr_lifecycle::InfoHash) {
+        let (_, core, hash) = playback_app();
+        let client: Arc<dyn ClientCore> = core;
+        let app = router_with_core(
+            ServerInfo {
+                version: "MatriX.145".into(),
+            },
+            client,
+            config,
+        );
+        (app, hash)
+    }
+
+    async fn send(
+        app: &Router,
+        method: Method,
+        uri: &str,
+        body: &str,
+    ) -> (StatusCode, HeaderMap, String) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, headers, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    #[tokio::test]
+    async fn streams_over_the_size_limit_are_refused_like_go_http_error() {
+        let (app, hash) = app_with(HttpConfig {
+            max_stream_size: Some(9),
+            ..HttpConfig::default()
+        });
+        for (method, uri) in [
+            (Method::GET, format!("/play/{hash}/1")),
+            (Method::HEAD, format!("/play/{hash}/1")),
+            (Method::GET, format!("/stream?link={hash}&index=1&play")),
+        ] {
+            let (status, headers, body) = send(&app, method.clone(), &uri, "").await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+            assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+            assert_eq!(headers["x-content-type-options"], "nosniff");
+            if method == Method::GET {
+                assert_eq!(body, "file size exceeded max allowed 9 bytes\n");
+            }
+        }
+        let (app, hash) = app_with(HttpConfig {
+            max_stream_size: Some(10),
+            ..HttpConfig::default()
+        });
+        assert_eq!(
+            send(&app, Method::GET, &format!("/play/{hash}/1"), "")
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_mode_refuses_management_writes() {
+        let (app, _) = app_with(HttpConfig {
+            read_only: true,
+            ..HttpConfig::default()
+        });
+        let refused = (
+            StatusCode::FORBIDDEN,
+            r#"{"error":"Read-only mode"}"#.to_owned(),
+        );
+        let (status, _, body) = send(
+            &app,
+            Method::POST,
+            "/waf",
+            r#"{"whitelist":"","blacklist":"","referers":""}"#,
+        )
+        .await;
+        assert_eq!((status, body), refused);
+        let (status, _, body) = send(
+            &app,
+            Method::POST,
+            "/storage/settings",
+            r#"{"settings":"json"}"#,
+        )
+        .await;
+        assert_eq!((status, body), refused);
+        let (_, _, body) = send(&app, Method::GET, "/waf", "").await;
+        assert!(body.contains(r#""read_only":true"#), "{body}");
+        let (status, _, body) = send(&app, Method::GET, "/shutdown", "").await;
+        assert_eq!((status, body.as_str()), (StatusCode::FORBIDDEN, ""));
+        assert_eq!(
+            send(&app, Method::GET, "/shutdown/maintenance", "").await.0,
+            StatusCode::OK
+        );
     }
 }

@@ -30,6 +30,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)?,
         trusted_proxies: config.trusted_proxies.clone(),
         shutdown: Some(Arc::new(Notify::new())),
+        read_only: config.read_only,
+        max_stream_size: config.max_stream_size,
+        search_without_auth: config.search_without_auth,
     };
 
     let listener = TcpListener::bind(config.listen)
@@ -75,8 +78,12 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let engine_port: Arc<dyn Engine> = engine.clone();
     let torrents = Arc::new(
         TorrentCoordinator::new(engine_port, Arc::clone(&cache), Arc::clone(&state))
-            .with_trackers_file(config.data_dir.join("trackers.txt")),
+            .with_trackers_file(config.data_dir.join("trackers.txt"))
+            .with_read_only(config.read_only),
     );
+    if let Some(dir) = &config.torrents_dir {
+        tokio::spawn(Arc::clone(&torrents).watch_torrents_dir(dir.clone(), Duration::from_secs(1)));
+    }
     #[cfg(feature = "r5-test-control")]
     start_test_control(Arc::clone(&torrents)).await?;
     info!(

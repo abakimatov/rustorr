@@ -1,6 +1,7 @@
 //! Torrent lifecycle policy: the only module allowed to coordinate engine
 //! sessions, Rustorr cache eviction and the persistent catalog.
 
+mod autoload;
 mod client;
 mod memory;
 mod model;
@@ -192,6 +193,7 @@ pub struct TorrentCoordinator {
     next_prefetch_id: AtomicU64,
     next_idle_id: AtomicU64,
     trackers_file: Option<PathBuf>,
+    read_only: bool,
 }
 
 impl TorrentCoordinator {
@@ -236,7 +238,20 @@ impl TorrentCoordinator {
             next_prefetch_id: AtomicU64::new(1),
             next_idle_id: AtomicU64::new(1),
             trackers_file: None,
+            read_only: false,
         }
+    }
+
+    /// MatriX.145's read-only DB mode: writes to the catalog, settings,
+    /// viewed history and WAF lists are silently skipped, and `rem` removes
+    /// nothing. A new data directory is still initialised on first start.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    pub fn read_only(&self) -> bool {
+        self.read_only
     }
 
     /// `<data-dir>/trackers.txt`, read on every add like MatriX.145 does.
@@ -301,6 +316,9 @@ impl TorrentCoordinator {
     }
 
     pub async fn set_settings(&self, settings: Settings) -> Result<(), Error> {
+        if self.read_only {
+            return Ok(());
+        }
         let settings = settings.normalized();
         self.state
             .set_settings(&serde_json::to_string(&settings).expect("settings serialize"))?;
@@ -337,6 +355,32 @@ impl TorrentCoordinator {
                 Err(error) => return Err(error),
             }
         }
+        Ok(())
+    }
+
+    /// Records MatriX.145's settings/viewed storage choice. SQLite stays the
+    /// only store (ADR 0006), so the choice is kept and reported, not acted on.
+    pub fn set_storage_preferences(
+        &self,
+        settings_in_json: Option<bool>,
+        viewed_in_json: Option<bool>,
+    ) -> Result<(), Error> {
+        if self.read_only {
+            return Ok(());
+        }
+        let mut settings = self.settings();
+        if let Some(value) = settings_in_json {
+            settings.store_settings_in_json = value;
+        }
+        if let Some(value) = viewed_in_json {
+            settings.store_viewed_in_json = value;
+        }
+        self.state
+            .set_settings(&serde_json::to_string(&settings).expect("settings serialize"))?;
+        *self
+            .settings
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = settings;
         Ok(())
     }
 
@@ -501,6 +545,9 @@ impl TorrentCoordinator {
     }
 
     fn persist(&self, live: &LiveTorrent) -> Result<(), Error> {
+        if self.read_only {
+            return Ok(());
+        }
         let entry = CatalogEntry {
             hash: live.metadata.hash,
             title: live.title.clone(),
@@ -931,6 +978,9 @@ impl TorrentCoordinator {
     /// TorrServer `rem`: delete the session, cache and catalog while leaving
     /// viewed history untouched.
     pub async fn remove_torrent(&self, hash: InfoHash) -> Result<bool, Error> {
+        if self.read_only {
+            return Ok(false);
+        }
         let _gate = self.gate.lock().await;
         self.stop_idle_detach_locked(hash).await;
         // After a process restart the catalog and disk manifest exist before
@@ -1028,7 +1078,9 @@ impl TorrentCoordinator {
         if !update.data.is_empty() {
             entry.data = update.data;
         }
-        self.state.save_torrent(&entry, &metainfo)?;
+        if !self.read_only {
+            self.state.save_torrent(&entry, &metainfo)?;
+        }
         Ok(())
     }
 
@@ -1525,6 +1577,114 @@ mod tests {
                 "http://file/announce"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn torrent_files_appearing_in_the_watched_directory_are_saved_and_removed() {
+        let fixture = Fixture::new(1_000);
+        let incoming = fixture.dir.path().join("incoming");
+        std::fs::create_dir(&incoming).unwrap();
+        let existing = incoming.join("existing.torrent");
+        std::fs::write(&existing, [1]).unwrap();
+        let watcher = tokio::spawn(
+            Arc::clone(&fixture.coordinator)
+                .watch_torrents_dir(incoming.clone(), Duration::from_millis(20)),
+        );
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let added = incoming.join("Added.TORRENT");
+        std::fs::write(&added, [2]).unwrap();
+        std::fs::write(incoming.join("notes.txt"), [3]).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while added.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        watcher.abort();
+
+        let hash = FakeEngine::hash(2);
+        let saved = fixture.state.torrent(hash).unwrap().unwrap();
+        assert_eq!(saved.title, "2.bin");
+        assert!(!fixture.engine.is_loaded(hash), "dropped after saving");
+        assert!(existing.exists(), "files present at start are left alone");
+        assert!(
+            fixture
+                .state
+                .torrent(FakeEngine::hash(1))
+                .unwrap()
+                .is_none()
+        );
+        assert!(incoming.join("notes.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn read_only_mode_keeps_every_database_write_out() {
+        let cache = Arc::new(Cache::new(
+            Arc::new(MemoryStore::new()),
+            CacheConfig { cap_bytes: 1_000 },
+        ));
+        let state = Arc::new(State::open_in_memory().unwrap());
+        let engine: Arc<dyn Engine> = Arc::new(FakeEngine::new(Arc::clone(&cache)));
+        let coordinator =
+            TorrentCoordinator::new(engine, cache, Arc::clone(&state)).with_read_only(true);
+        let before = coordinator.settings();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("1.torrent");
+        std::fs::write(&path, [1]).unwrap();
+        let view = coordinator
+            .add_torrent(AddTorrent {
+                link: format!("file://{}", path.display()),
+                save_to_db: true,
+                ..AddTorrent::default()
+            })
+            .await
+            .unwrap();
+        let hash = view.hash().unwrap();
+
+        coordinator
+            .set_settings(Settings {
+                cache_size: 1,
+                ..before.clone()
+            })
+            .await
+            .unwrap();
+        coordinator.reset_settings().await.unwrap();
+        coordinator
+            .set_storage_preferences(Some(false), Some(true))
+            .unwrap();
+        assert!(!coordinator.remove_torrent(hash).await.unwrap());
+        ClientCore::viewed(
+            &coordinator,
+            ViewedCommand::Set {
+                hash,
+                index: 1,
+                timecode: 1.0,
+            },
+        )
+        .await
+        .unwrap();
+        ClientCore::waf(
+            &coordinator,
+            WafCommand::Set(WafLists {
+                whitelist: String::new(),
+                blacklist: "10.0.0.0/8".into(),
+                referers: String::new(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(coordinator.settings(), before);
+        assert!(state.torrent(hash).unwrap().is_none());
+        assert!(state.list_viewed().unwrap().is_empty());
+        assert_eq!(
+            state.waf_lists().unwrap(),
+            rustorr_state::WafLists::default()
+        );
+        let listed = coordinator.list_views().await.unwrap();
+        assert_eq!(listed.len(), 1, "the unsaved torrent stays live");
     }
 
     #[tokio::test]

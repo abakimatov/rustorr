@@ -59,6 +59,12 @@ pub enum SettingsCommand {
     Get,
     Set(Box<Settings>),
     Defaults,
+    /// `/storage/settings`: only the two storage flags change; unlike `Set`,
+    /// live torrents stay loaded.
+    SetStorage {
+        settings_in_json: Option<bool>,
+        viewed_in_json: Option<bool>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +219,13 @@ impl ClientCore for TorrentCoordinator {
                     self.reset_settings().await?;
                     Ok(TorrentCoordinator::settings(self))
                 }
+                SettingsCommand::SetStorage {
+                    settings_in_json,
+                    viewed_in_json,
+                } => {
+                    self.set_storage_preferences(settings_in_json, viewed_in_json)?;
+                    Ok(TorrentCoordinator::settings(self))
+                }
             }
         })
     }
@@ -226,6 +239,9 @@ impl ClientCore for TorrentCoordinator {
                     timecode,
                 } => {
                     let index = index.checked_sub(1).ok_or(Error::InvalidIndex(index))?;
+                    if self.read_only() {
+                        return Ok(Vec::new());
+                    }
                     let timecode = if self.settings().track_timecode {
                         timecode
                     } else {
@@ -239,6 +255,9 @@ impl ClientCore for TorrentCoordinator {
                     Ok(Vec::new())
                 }
                 ViewedCommand::Remove { hash, index } => {
+                    if self.read_only() {
+                        return Ok(Vec::new());
+                    }
                     let file = index
                         .map(|index| {
                             index
@@ -289,6 +308,14 @@ impl ClientCore for TorrentCoordinator {
                         whitelist: lists.whitelist,
                         blacklist: lists.blacklist,
                         referers: lists.referers,
+                    })
+                }
+                WafCommand::Set(_) if self.read_only() => {
+                    let current = self.state.waf_lists()?;
+                    Ok(WafLists {
+                        whitelist: current.whitelist,
+                        blacklist: current.blacklist,
+                        referers: current.referers,
                     })
                 }
                 WafCommand::Set(lists) => {
