@@ -8,6 +8,7 @@ use rustorr_cache::{Cache, CacheConfig, DiskStore, MemoryStore, PieceStore};
 use rustorr_engine::{Engine, EngineConfig, LibrqbitEngine};
 use rustorr_http::{Credentials, HttpConfig, ServerInfo};
 use rustorr_lifecycle::{ClientCore, TorrentCoordinator};
+use rustorr_search::{RUTOR_URL, RutorDatabase, Search, SearchService};
 use rustorr_state::State;
 use tokio::{
     net::TcpListener,
@@ -97,9 +98,23 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         "listening"
     );
 
+    let search: Arc<dyn Search> = Arc::new(SearchService::new(RutorDatabase::new(
+        config.data_dir.join("rutor.ls"),
+        RUTOR_URL,
+    )));
+    search
+        .set_rutor_enabled(torrents.settings().enable_rutor_search)
+        .await;
     let core: Arc<dyn ClientCore> = torrents;
-    let outcome =
-        serve_until_signalled(listener, &mut signals, config.shutdown_grace, core, http).await;
+    let outcome = serve_until_signalled(
+        listener,
+        &mut signals,
+        config.shutdown_grace,
+        core,
+        search,
+        http,
+    )
+    .await;
 
     // Reverse order of startup, whatever ended the server.
     engine.shutdown().await;
@@ -184,6 +199,7 @@ async fn serve_until_signalled(
     signals: &mut Signals,
     grace: Duration,
     core: Arc<dyn ClientCore>,
+    search: Arc<dyn Search>,
     http: HttpConfig,
 ) -> anyhow::Result<()> {
     let (stop, stopped) = oneshot::channel::<()>();
@@ -194,9 +210,10 @@ async fn serve_until_signalled(
         version: "MatriX.145".into(),
     };
     let requested = http.shutdown.clone().unwrap_or_default();
-    let server = rustorr_http::serve_with_core(listener, info, core, http, async move {
-        let _ = stopped.await;
-    });
+    let server =
+        rustorr_http::serve_with_services(listener, info, core, search, http, async move {
+            let _ = stopped.await;
+        });
     tokio::pin!(server);
 
     tokio::select! {

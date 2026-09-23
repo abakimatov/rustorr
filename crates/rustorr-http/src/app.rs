@@ -25,6 +25,7 @@ use rustorr_lifecycle::{
     TorrentCommand, TorrentCoordinator, TorrentReply, TorrentView, UpdateTorrent, ViewedCommand,
     WafCommand, WafLists, link_info_hash,
 };
+use rustorr_search::Search;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
@@ -37,9 +38,10 @@ use tracing::{Level, error, info_span};
 use crate::{
     ApiError,
     access::{HttpConfig, WafSnapshot},
+    error::go_json,
     m3u,
     range::{self, ByteRange, RangeError},
-    settings_api, web_api,
+    search_api, settings_api, web_api,
 };
 
 #[derive(Debug, Clone)]
@@ -51,6 +53,7 @@ pub struct ServerInfo {
 pub(crate) struct AppState {
     info: ServerInfo,
     pub(crate) core: Arc<dyn ClientCore>,
+    pub(crate) search: Arc<dyn Search>,
     pub(crate) http: HttpConfig,
 }
 
@@ -69,7 +72,21 @@ pub fn router_with_lifecycle(info: ServerInfo, torrents: Arc<TorrentCoordinator>
 }
 
 pub fn router_with_core(info: ServerInfo, core: Arc<dyn ClientCore>, http: HttpConfig) -> Router {
-    let state = AppState { info, core, http };
+    router_with_services(info, core, Arc::new(search_api::NoSearch), http)
+}
+
+pub fn router_with_services(
+    info: ServerInfo,
+    core: Arc<dyn ClientCore>,
+    search: Arc<dyn Search>,
+    http: HttpConfig,
+) -> Router {
+    let state = AppState {
+        info,
+        core,
+        search,
+        http,
+    };
     let routes = Router::new()
         .route("/echo", get(echo_state))
         .route("/torrents", post(torrents))
@@ -92,6 +109,15 @@ pub fn router_with_core(info: ServerInfo, core: Arc<dyn ClientCore>, http: HttpC
             get(settings_api::get_storage).post(settings_api::set_storage),
         )
         .route("/tmdb/settings", get(settings_api::tmdb))
+        // gin's `/search/*query` also matches `/search` and `/search/`; an
+        // axum wildcard needs at least one character after the slash.
+        .route("/search", get(search_api::rutor))
+        .route("/search/", get(search_api::rutor))
+        .route("/search/{*query}", get(search_api::rutor))
+        .route("/torznab/search", get(search_api::torznab))
+        .route("/torznab/search/", get(search_api::torznab))
+        .route("/torznab/search/{*query}", get(search_api::torznab))
+        .route("/torznab/test", post(search_api::torznab_test))
         .route("/download/{size}", get(web_api::download))
         .route("/shutdown", get(web_api::shutdown))
         .route("/shutdown/{*reason}", get(web_api::shutdown))
@@ -139,6 +165,23 @@ pub async fn serve_with_lifecycle(
 ) -> io::Result<()> {
     let core: Arc<dyn ClientCore> = torrents;
     serve_with_core(listener, info, core, HttpConfig::default(), shutdown).await
+}
+
+pub async fn serve_with_services(
+    listener: tokio::net::TcpListener,
+    info: ServerInfo,
+    core: Arc<dyn ClientCore>,
+    search: Arc<dyn Search>,
+    http: HttpConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    axum::serve(
+        listener,
+        router_with_services(info, core, search, http)
+            .into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 pub async fn serve_with_core(
@@ -317,8 +360,7 @@ pub(crate) fn lifecycle(error: impl std::fmt::Display) -> ApiError {
 }
 
 pub(crate) fn json_response(value: impl Serialize) -> Result<Response<Body>, ApiError> {
-    let bytes = serde_json::to_vec(&value)
-        .map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))?;
+    let bytes = go_json(&value).map_err(|_| ApiError::Status(StatusCode::INTERNAL_SERVER_ERROR))?;
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
@@ -511,6 +553,14 @@ async fn settings(
         .settings(command)
         .await
         .map_err(|error| lifecycle(error).into_response())?;
+    // MatriX.145 restarts Rutor search on every change, following the
+    // settings it now has.
+    if request.action != "get" {
+        state
+            .search
+            .set_rutor_enabled(settings.enable_rutor_search)
+            .await;
+    }
     if request.action == "get" {
         json_response(settings).map_err(IntoResponse::into_response)
     } else {
@@ -842,7 +892,7 @@ async fn stream_named(
     stream_impl(state, peer, Some(fname), request).await
 }
 
-fn query(uri: &Uri) -> HashMap<String, String> {
+pub(crate) fn query(uri: &Uri) -> HashMap<String, String> {
     uri.query()
         .unwrap_or_default()
         .split('&')
