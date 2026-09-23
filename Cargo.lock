@@ -2672,6 +2672,7 @@ dependencies = [
  "anyhow",
  "librqbit",
  "librqbit-core",
+ "percent-encoding",
  "rustorr-cache",
  "rustorr-domain",
  "tempfile",

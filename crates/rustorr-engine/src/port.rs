@@ -26,6 +26,8 @@ pub enum TorrentSource {
 pub struct AddOptions {
     pub only_files: Option<Vec<usize>>,
     pub initial_peers: Vec<SocketAddr>,
+    /// Trackers announced to in addition to the torrent's own.
+    pub trackers: Vec<String>,
 }
 
 /// Metadata Rustorr needs to persist and stream a resolved torrent.

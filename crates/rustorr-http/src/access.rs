@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use axum::http::{HeaderMap, Uri, header};
 use rustorr_lifecycle::WafLists;
+use tokio::sync::Notify;
 
 const DEFAULT_BLOCKED_REFERERS: &[&str] = &[
     "abhq.ru",
@@ -68,12 +69,15 @@ impl Credentials {
 pub struct HttpConfig {
     pub credentials: Option<Credentials>,
     pub trusted_proxies: Vec<IpNet>,
+    /// Signalled by `GET /shutdown`; the server stops as it does on SIGTERM.
+    pub shutdown: Option<Arc<Notify>>,
 }
 
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             credentials: None,
+            shutdown: None,
             trusted_proxies: vec![
                 "127.0.0.0/8".parse().expect("loopback CIDR"),
                 "::1/128".parse().expect("loopback CIDR"),

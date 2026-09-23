@@ -10,9 +10,9 @@ use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::InfoHash;
 use crate::{
-    CacheCommand, CacheView, ClientCore, ClientFuture, Error, Playback, PlaybackRequest, Settings,
-    SettingsCommand, TorrentCommand, TorrentReply, TorrentView, ViewedCommand, ViewedFile,
-    WafCommand, WafLists,
+    CacheCommand, CacheView, ClientCore, ClientFuture, Error, MagnetView, Playback,
+    PlaybackRequest, Settings, SettingsCommand, TorrentCommand, TorrentReply, TorrentView,
+    ViewedCommand, ViewedFile, WafCommand, WafLists,
 };
 
 #[derive(Clone)]
@@ -137,6 +137,19 @@ impl ClientCore for InMemoryClientCore {
                     state.torrents.clear();
                     Ok(TorrentReply::Empty)
                 }
+                TorrentCommand::Magnets => Ok(TorrentReply::Magnets(
+                    state
+                        .torrents
+                        .values()
+                        .filter_map(|torrent| {
+                            Some(MagnetView {
+                                hash: torrent.view.hash.as_deref()?.parse().ok()?,
+                                name: torrent.view.name.clone().unwrap_or_default(),
+                                trackers: Vec::new(),
+                            })
+                        })
+                        .collect(),
+                )),
             }
         })
     }

@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rustorr_domain::InfoHash;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,4 +294,12 @@ mod tests {
         assert_eq!(settings.preload_cache, 100);
         assert!(!settings.use_disk);
     }
+}
+
+/// A saved torrent as `/magnets` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MagnetView {
+    pub hash: InfoHash,
+    pub name: String,
+    pub trackers: Vec<String>,
 }

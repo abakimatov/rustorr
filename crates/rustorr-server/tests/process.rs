@@ -269,6 +269,23 @@ fn text_logs_also_work_and_report_the_address() {
 }
 
 #[test]
+fn a_shutdown_request_over_http_stops_the_server_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = Server::start(dir.path(), &[]);
+    assert_eq!(http_get(server.address(), "/shutdown").0, "HTTP/1.1 200 OK");
+    let exit = server.wait_for_exit();
+    assert!(exit.status.success(), "{:?}", server.messages());
+    assert_in_order(
+        &server,
+        &[
+            "shutdown requested over HTTP",
+            "http server stopped",
+            "shutdown complete",
+        ],
+    );
+}
+
+#[test]
 fn restarts_on_the_same_data_directory_without_touching_what_is_stored() {
     let dir = tempfile::tempdir().unwrap();
     let database = dir.path().join("rustorr.db");

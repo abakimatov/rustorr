@@ -125,9 +125,14 @@ impl LibrqbitEngine {
         source: TorrentSource,
         options: AddOptions,
     ) -> Result<TorrentMetadata, Error> {
+        // librqbit applies extra trackers to torrent files and .torrent URLs
+        // but ignores them for magnets, so a magnet carries them itself.
         let source = match source {
             TorrentSource::TorrentBytes(bytes) => AddTorrent::from_bytes(bytes),
-            TorrentSource::Magnet(value) | TorrentSource::Url(value) => AddTorrent::from_url(value),
+            TorrentSource::Magnet(value) => {
+                AddTorrent::from_url(magnet_with_trackers(value, &options.trackers))
+            }
+            TorrentSource::Url(value) => AddTorrent::from_url(value),
         };
         let response = self
             .session
@@ -137,6 +142,7 @@ impl LibrqbitEngine {
                     only_files: options.only_files,
                     initial_peers: (!options.initial_peers.is_empty())
                         .then_some(options.initial_peers),
+                    trackers: (!options.trackers.is_empty()).then_some(options.trackers),
                     ..LibrqbitAddOptions::default()
                 }),
             )
@@ -388,6 +394,17 @@ fn verify(config: &EngineConfig, status: &EngineStatus) -> Result<(), Error> {
         });
     }
     Ok(())
+}
+
+fn magnet_with_trackers(mut magnet: String, trackers: &[String]) -> String {
+    for tracker in trackers {
+        magnet.push_str("&tr=");
+        magnet.extend(percent_encoding::utf8_percent_encode(
+            tracker,
+            percent_encoding::NON_ALPHANUMERIC,
+        ));
+    }
+    magnet
 }
 
 /// The path TorrServer shows for a file. anacrolix, behind MatriX.145, puts
@@ -644,6 +661,21 @@ mod tests {
         assert!(engine.is_loaded(hash));
 
         engine.shutdown().await;
+    }
+
+    #[test]
+    fn a_magnet_carries_extra_trackers_itself() {
+        assert_eq!(
+            magnet_with_trackers(
+                "magnet:?xt=urn:btih:00".into(),
+                &["udp://a:1/announce".into(), "wss://b".into()]
+            ),
+            "magnet:?xt=urn:btih:00&tr=udp%3A%2F%2Fa%3A1%2Fannounce&tr=wss%3A%2F%2Fb"
+        );
+        assert_eq!(
+            magnet_with_trackers("magnet:?xt=urn:btih:00".into(), &[]),
+            "magnet:?xt=urn:btih:00"
+        );
     }
 
     /// A one-piece metainfo; `files` is the bencoded body of `length` or

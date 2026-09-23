@@ -39,6 +39,7 @@ use crate::{
     access::{HttpConfig, WafSnapshot},
     m3u,
     range::{self, ByteRange, RangeError},
+    web_api,
 };
 
 #[derive(Debug, Clone)]
@@ -47,10 +48,10 @@ pub struct ServerInfo {
 }
 
 #[derive(Clone)]
-struct AppState {
+pub(crate) struct AppState {
     info: ServerInfo,
-    core: Arc<dyn ClientCore>,
-    http: HttpConfig,
+    pub(crate) core: Arc<dyn ClientCore>,
+    pub(crate) http: HttpConfig,
 }
 
 pub fn router(info: ServerInfo) -> Router {
@@ -83,6 +84,12 @@ pub fn router_with_core(info: ServerInfo, core: Arc<dyn ClientCore>, http: HttpC
         .route("/playlist", get(playlist_root))
         .route("/playlist/{*fname}", get(playlist_named))
         .route("/playlistall/all.m3u", get(playlist_all))
+        .route("/", get(web_api::root))
+        .route("/magnets", get(web_api::magnets))
+        .route("/stat", get(web_api::stat))
+        .route("/download/{size}", get(web_api::download))
+        .route("/shutdown", get(web_api::shutdown))
+        .route("/shutdown/{*reason}", get(web_api::shutdown))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(state.clone())
@@ -252,7 +259,7 @@ fn add_cors_headers(response: &mut HeaderMap, request: &HeaderMap) {
     }
 }
 
-fn unauthorized() -> Response<Body> {
+pub(crate) fn unauthorized() -> Response<Body> {
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
         .header(
@@ -263,7 +270,7 @@ fn unauthorized() -> Response<Body> {
         .expect("valid unauthorized response")
 }
 
-fn management_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+pub(crate) fn management_authorized(state: &AppState, headers: &HeaderMap) -> bool {
     state.http.authorized(headers)
 }
 
@@ -288,7 +295,7 @@ fn json_bad_request(message: impl Into<String>) -> ApiError {
     }
 }
 
-fn lifecycle(error: impl std::fmt::Display) -> ApiError {
+pub(crate) fn lifecycle(error: impl std::fmt::Display) -> ApiError {
     json_bad_request(error.to_string())
 }
 
@@ -381,7 +388,8 @@ async fn torrents(
         TorrentReply::List(torrents) => {
             json_response(torrents).map_err(IntoResponse::into_response)
         }
-        TorrentReply::Empty => Ok(StatusCode::OK.into_response()),
+        // `/torrents` never asks for the magnet list.
+        TorrentReply::Empty | TorrentReply::Magnets(_) => Ok(StatusCode::OK.into_response()),
     }
 }
 
@@ -1469,7 +1477,7 @@ fn panicked(payload: Box<dyn Any + Send + 'static>) -> Response<Body> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{collections::HashMap, fs};
 
     use axum::{body::to_bytes, http::Request};
@@ -1507,7 +1515,7 @@ mod tests {
         assert!(response.headers().get(header::ALLOW).is_none());
     }
 
-    fn playback_app() -> (Router, Arc<InMemoryClientCore>, InfoHash) {
+    pub(crate) fn playback_app() -> (Router, Arc<InMemoryClientCore>, InfoHash) {
         let hash: InfoHash = "0101010101010101010101010101010101010101".parse().unwrap();
         let core = Arc::new(InMemoryClientCore::new());
         core.insert(

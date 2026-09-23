@@ -304,6 +304,9 @@
     {"id": "r7-gst-settings", "area": "gstreamer", "method": "GET", "path": "/gst/settings", "classification": "core", "profiles": ["r7"], "auth": true},
     {"id": "r7-gst-echo", "area": "gstreamer", "method": "GET", "path": "/gst/echo", "classification": "core", "profiles": ["r7"], "auth": true},
     {"id": "r7-gst-probe", "area": "gstreamer", "method": "GET", "path": "/gst/${media_hash}/probe?index=1", "setup": [{"id": "add-gst", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-gst", "wait_for_metadata": "${media_hash}"}], "classification": "core", "profiles": ["r7"], "auth": true},
-    {"id": "r7-gst-heartbeat-unknown", "area": "gstreamer", "method": "GET", "path": "/gst/0000000000000000000000000000000000000000/heartbeat", "classification": "core", "profiles": ["r7"], "auth": true}
+    {"id": "r7-gst-heartbeat-unknown", "area": "gstreamer", "method": "GET", "path": "/gst/0000000000000000000000000000000000000000/heartbeat", "classification": "core", "profiles": ["r7"], "auth": true},
+    {"id": "r7-download-invalid", "area": "web-api", "method": "GET", "path": "/download/abc", "classification": "core", "profiles": ["r7"], "auth": true},
+    {"id": "r7-download-multipart", "area": "web-api", "method": "GET", "path": "/download/1", "headers": {"Range": "bytes=0-1,4-5"}, "classification": "core", "profiles": ["r7"], "auth": true},
+    {"id": "r7-magnets-order", "area": "web-api", "method": "GET", "path": "/magnets", "setup": [{"id": "add-magnets-single", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${torrent_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-magnets-single", "wait_for_metadata": "${torrent_hash}", "require_data": true}, {"id": "add-magnets-media", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${media_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-magnets-media", "wait_for_metadata": "${media_hash}", "require_data": true}], "classification": "core", "profiles": ["r7"], "auth": true}
   ]
 }

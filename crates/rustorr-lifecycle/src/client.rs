@@ -5,26 +5,34 @@ use rustorr_domain::{FileIndex, InfoHash};
 use rustorr_state::ViewedEntry;
 use tokio::io::AsyncRead;
 
-use crate::{AddTorrent, Error, Settings, TorrentCoordinator, TorrentView, UpdateTorrent};
+use crate::{
+    AddTorrent, Error, MagnetView, Settings, TorrentCoordinator, TorrentView, UpdateTorrent,
+};
 
 pub type ClientFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 pub enum TorrentCommand {
     Add(AddTorrent),
-    AddMetainfo { bytes: Vec<u8>, request: AddTorrent },
+    AddMetainfo {
+        bytes: Vec<u8>,
+        request: AddTorrent,
+    },
     Get(InfoHash),
     Set(UpdateTorrent),
     Remove(InfoHash),
     List,
     Drop(InfoHash),
     Wipe,
+    /// Saved torrents as `/magnets` lists them.
+    Magnets,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TorrentReply {
     Torrent(Option<Box<TorrentView>>),
     List(Vec<TorrentView>),
+    Magnets(Vec<MagnetView>),
     Empty,
 }
 
@@ -152,6 +160,7 @@ impl ClientCore for TorrentCoordinator {
                     self.wipe().await?;
                     Ok(TorrentReply::Empty)
                 }
+                TorrentCommand::Magnets => self.magnets().await.map(TorrentReply::Magnets),
             }
         })
     }

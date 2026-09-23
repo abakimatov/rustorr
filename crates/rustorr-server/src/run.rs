@@ -12,7 +12,7 @@ use rustorr_state::State;
 use tokio::{
     net::TcpListener,
     signal::unix::{Signal, SignalKind, signal},
-    sync::oneshot,
+    sync::{Notify, oneshot},
 };
 use tracing::{info, warn};
 
@@ -29,6 +29,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             .transpose()
             .map_err(anyhow::Error::msg)?,
         trusted_proxies: config.trusted_proxies.clone(),
+        shutdown: Some(Arc::new(Notify::new())),
     };
 
     let listener = TcpListener::bind(config.listen)
@@ -72,11 +73,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     let engine_status = engine.status();
     let engine_port: Arc<dyn Engine> = engine.clone();
-    let torrents = Arc::new(TorrentCoordinator::new(
-        engine_port,
-        Arc::clone(&cache),
-        Arc::clone(&state),
-    ));
+    let torrents = Arc::new(
+        TorrentCoordinator::new(engine_port, Arc::clone(&cache), Arc::clone(&state))
+            .with_trackers_file(config.data_dir.join("trackers.txt")),
+    );
     #[cfg(feature = "r5-test-control")]
     start_test_control(Arc::clone(&torrents)).await?;
     info!(
@@ -186,6 +186,7 @@ async fn serve_until_signalled(
         // of Rustorr's package version.
         version: "MatriX.145".into(),
     };
+    let requested = http.shutdown.clone().unwrap_or_default();
     let server = rustorr_http::serve_with_core(listener, info, core, http, async move {
         let _ = stopped.await;
     });
@@ -196,21 +197,36 @@ async fn serve_until_signalled(
             result.context("the HTTP server failed")?;
             bail!("the HTTP server stopped without being asked to")
         }
+        () = requested.notified() => {
+            info!("shutdown requested over HTTP");
+            stop_gracefully(server.as_mut(), stop, grace).await
+        }
         signal = signals.next() => {
             info!(signal, "shutdown signal received");
-            match stop_within(server.as_mut(), stop, grace)
-                .await
-                .context("the HTTP server failed while stopping")?
-            {
-                Stopped::Cleanly => info!("http server stopped"),
-                Stopped::TimedOut => warn!(
-                    grace_seconds = grace.as_secs(),
-                    "open connections did not finish in time and were closed"
-                ),
-            }
-            Ok(())
+            stop_gracefully(server.as_mut(), stop, grace).await
         }
     }
+}
+
+async fn stop_gracefully<F>(
+    server: Pin<&mut F>,
+    stop: oneshot::Sender<()>,
+    grace: Duration,
+) -> anyhow::Result<()>
+where
+    F: Future<Output = io::Result<()>>,
+{
+    match stop_within(server, stop, grace)
+        .await
+        .context("the HTTP server failed while stopping")?
+    {
+        Stopped::Cleanly => info!("http server stopped"),
+        Stopped::TimedOut => warn!(
+            grace_seconds = grace.as_secs(),
+            "open connections did not finish in time and were closed"
+        ),
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]

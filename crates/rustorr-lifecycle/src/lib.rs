@@ -5,13 +5,14 @@ mod client;
 mod memory;
 mod model;
 mod torrs_hash;
+pub mod trackers;
 
 pub use client::{
     AccessPolicy, CacheCommand, CacheView, ClientCore, ClientFuture, Playback, PlaybackRequest,
     SettingsCommand, TorrentCommand, TorrentReply, ViewedCommand, ViewedFile, WafCommand, WafLists,
 };
 pub use memory::InMemoryClientCore;
-pub use model::{Settings, TmdbConfig, TorrentFileView, TorrentView, TorznabConfig};
+pub use model::{MagnetView, Settings, TmdbConfig, TorrentFileView, TorrentView, TorznabConfig};
 pub use rustorr_domain::InfoHash;
 
 pub fn link_info_hash(link: &str) -> Option<InfoHash> {
@@ -35,6 +36,7 @@ pub fn link_info_hash(link: &str) -> Option<InfoHash> {
 use std::{
     collections::HashMap,
     io,
+    path::PathBuf,
     pin::Pin,
     sync::{
         Arc, RwLock, Weak,
@@ -189,6 +191,7 @@ pub struct TorrentCoordinator {
     settings: RwLock<Settings>,
     next_prefetch_id: AtomicU64,
     next_idle_id: AtomicU64,
+    trackers_file: Option<PathBuf>,
 }
 
 impl TorrentCoordinator {
@@ -232,7 +235,62 @@ impl TorrentCoordinator {
             settings: RwLock::new(settings),
             next_prefetch_id: AtomicU64::new(1),
             next_idle_id: AtomicU64::new(1),
+            trackers_file: None,
         }
+    }
+
+    /// `<data-dir>/trackers.txt`, read on every add like MatriX.145 does.
+    pub fn with_trackers_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.trackers_file = Some(path.into());
+        self
+    }
+
+    fn file_trackers(&self) -> Vec<String> {
+        self.trackers_file
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|text| trackers::parse_trackers_file(&text))
+            .unwrap_or_default()
+    }
+
+    /// Trackers the engine announces to besides the torrent's own. librqbit
+    /// can add trackers but not drop a torrent's own, so modes 2 and 3 still
+    /// keep them there.
+    fn extra_trackers(&self) -> Vec<String> {
+        let settings = self.settings();
+        let mut extra = match settings.retrackers_mode {
+            1 | 3 => trackers::default_trackers(&settings),
+            _ => Vec::new(),
+        };
+        extra.extend(self.file_trackers());
+        extra
+    }
+
+    /// Saved torrents with the trackers MatriX.145 puts in their magnet links,
+    /// newest first.
+    pub async fn magnets(&self) -> Result<Vec<MagnetView>, Error> {
+        let settings = self.settings();
+        let file = self.file_trackers();
+        let mut entries = self.state.list_torrents()?;
+        entries.sort_by(|left, right| {
+            right
+                .added_at
+                .cmp(&left.added_at)
+                .then_with(|| left.hash.to_string().cmp(&right.hash.to_string()))
+        });
+        let mut magnets = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let Some(metainfo) = self.state.metainfo(entry.hash)? else {
+                continue;
+            };
+            let metadata = self.engine.inspect_metainfo(&metainfo)?;
+            magnets.push(MagnetView {
+                hash: entry.hash,
+                name: metadata.name,
+                trackers: trackers::announce_list(&metadata.trackers, &settings, &file),
+            });
+        }
+        Ok(magnets)
     }
 
     pub fn settings(&self) -> Settings {
@@ -389,6 +447,7 @@ impl TorrentCoordinator {
                 source,
                 AddOptions {
                     initial_peers: initial_peers.clone(),
+                    trackers: self.extra_trackers(),
                     ..AddOptions::default()
                 },
             )
@@ -604,6 +663,7 @@ impl TorrentCoordinator {
                 TorrentSource::TorrentBytes(metainfo),
                 AddOptions {
                     initial_peers: initial_peers.clone(),
+                    trackers: self.extra_trackers(),
                     ..AddOptions::default()
                 },
             )
@@ -1110,7 +1170,7 @@ mod tests {
                     path: format!("{byte}.bin"),
                     length: 100,
                 }],
-                trackers: Vec::new(),
+                trackers: vec!["http://own/announce".into()],
             })
         }
 
@@ -1410,6 +1470,61 @@ mod tests {
 
         assert!(!fixture.engine.is_loaded(first.hash));
         assert!(fixture.engine.is_loaded(second.hash));
+    }
+
+    #[tokio::test]
+    async fn default_and_file_trackers_reach_the_engine_and_the_magnet_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let trackers_file = dir.path().join("trackers.txt");
+        std::fs::write(
+            &trackers_file,
+            "http://file/announce\nwss://not-from-a-file\n",
+        )
+        .unwrap();
+        let cache = Arc::new(Cache::new(
+            Arc::new(MemoryStore::new()),
+            CacheConfig { cap_bytes: 1_000 },
+        ));
+        let engine = Arc::new(FakeEngine::new(Arc::clone(&cache)));
+        let engine_port: Arc<dyn Engine> = engine.clone();
+        let coordinator = TorrentCoordinator::new(
+            engine_port,
+            cache,
+            Arc::new(State::open_in_memory().unwrap()),
+        )
+        .with_trackers_file(trackers_file);
+        coordinator
+            .set_settings(Settings {
+                retrackers_mode: 1,
+                default_trackers: "udp://default:1".into(),
+                ..coordinator.settings()
+            })
+            .await
+            .unwrap();
+        let path = dir.path().join("1.torrent");
+        std::fs::write(&path, [1]).unwrap();
+        let entry = coordinator
+            .add_link(&format!("file://{}", path.display()))
+            .await
+            .unwrap();
+
+        let (_, options) = engine.add_options.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(
+            options.trackers,
+            ["udp://default:1", "http://file/announce"]
+        );
+        let magnets = coordinator.magnets().await.unwrap();
+        assert_eq!(magnets.len(), 1);
+        assert_eq!(magnets[0].hash, entry.hash);
+        assert_eq!(magnets[0].name, "1.bin");
+        assert_eq!(
+            magnets[0].trackers,
+            [
+                "http://own/announce",
+                "udp://default:1",
+                "http://file/announce"
+            ]
+        );
     }
 
     #[tokio::test]

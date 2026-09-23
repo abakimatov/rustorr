@@ -9,6 +9,7 @@ mod app;
 mod error;
 mod m3u;
 mod range;
+mod web_api;
 
 pub use access::{Credentials, HttpConfig};
 pub use app::{
