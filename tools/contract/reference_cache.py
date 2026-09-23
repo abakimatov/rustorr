@@ -30,7 +30,7 @@ INPUTS = (
     "tools/contract/r7",
     "tools/baseline/generate-fixtures.py",
     "tools/baseline/fixture_payload.py",
-    "tools/baseline/docker",
+    "tools/baseline/fixture_media.py",
 )
 
 
@@ -52,8 +52,8 @@ def image_id(image: str) -> str:
         text=True,
         check=False,
     )
-    # A missing image makes the key unique to this state; the capture builds
-    # it and the corpus is stored under the key computed afterwards.
+    # A missing image makes the key unique to this state: the capture builds
+    # the image, and such a corpus is not stored.
     return result.stdout.strip() if result.returncode == 0 else f"missing:{image}"
 
 
@@ -99,6 +99,11 @@ def command_store(args: argparse.Namespace) -> None:
         print(f"reference cache: {args.corpus} is not valid, not stored", file=sys.stderr)
         return
     description = json.loads(args.describe.read_text(encoding="utf-8"))
+    # An image this capture had to build is not identified yet; the next
+    # capture keys it and stores its corpus.
+    if any(image.startswith("missing:") for image in description["images"].values()):
+        print("reference cache: an image was built during the capture, not stored", file=sys.stderr)
+        return
     key = key_of(description)
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.corpus, args.cache_dir / f"{key}.json")

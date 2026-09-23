@@ -159,8 +159,12 @@ capture() {
   cache_mode=${RUSTORR_REFERENCE_CACHE:-on}
   cache_dir=${RUSTORR_REFERENCE_CACHE_DIR:-${RUN_ROOT}/reference-cache}
   case "${profile}" in proxy) cache_compose=${PROXY_COMPOSE} ;; *) cache_compose=${reference_compose} ;; esac
-  if [ "${target}" = reference ] && [ "${cache_mode}" = on ]; then
+  if [ "${target}" = reference ] && [ "${cache_mode}" != off ]; then
+    # The key is taken before the capture: files edited while it runs must
+    # not relabel the corpus.
     cache_key=$(reference_cache_describe "$@")
+  fi
+  if [ "${target}" = reference ] && [ "${cache_mode}" = on ]; then
     if [ -s "${cache_dir}/${cache_key}.json" ]; then
       cp "${cache_dir}/${cache_key}.json" "${output_dir}/${target}.json"
       echo "reference cache: hit ${cache_key}" >&2
@@ -213,8 +217,6 @@ capture() {
       --manifest tools/contract/scenarios.json --torrent-file "${torrent_file}" \
       --output "${output_dir}/${target}.json" "$@"
   if [ "${target}" = reference ] && [ "${cache_mode}" != off ]; then
-    # Images may have been built by this capture: key it by the state it ran in.
-    reference_cache_describe "$@" >/dev/null
     python3 "${ROOT}/tools/contract/reference_cache.py" store --cache-dir "${cache_dir}" \
       --describe "${output_dir}/${target}.cache-key.json" "${output_dir}/${target}.json"
   fi
