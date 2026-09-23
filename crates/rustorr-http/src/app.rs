@@ -40,7 +40,7 @@ use crate::{
     access::{HttpConfig, WafSnapshot},
     discovery::{Discovery, DiscoveryChange, NoDiscovery},
     error::go_json,
-    ffprobe_api, m3u,
+    ffprobe_api, gstreamer_api, m3u,
     msx_api::{self, Msx},
     range::{self, ByteRange, RangeError},
     search_api, settings_api, web_api,
@@ -164,6 +164,10 @@ pub fn router_with_services(
         )
         .route("/files/", get(msx_api::files).head(msx_api::files))
         .route("/files/{*path}", get(msx_api::files).head(msx_api::files))
+        .route(
+            "/gst/settings",
+            get(gstreamer_api::get_settings).post(gstreamer_api::set_settings),
+        )
         .route("/ffp/status", get(ffprobe_api::status))
         .route("/ffp/{hash}/{id}", get(ffprobe_api::probe))
         .route("/dav", any(webdav::handle))

@@ -12,6 +12,7 @@ mod error;
 mod ffprobe_api;
 mod file_server;
 mod go_decode;
+mod gstreamer_api;
 mod m3u;
 mod media_type;
 mod msx_api;
