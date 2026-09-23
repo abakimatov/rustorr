@@ -26,6 +26,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "net", "signal", "syn
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json", "ansi"] }
 ipnet.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

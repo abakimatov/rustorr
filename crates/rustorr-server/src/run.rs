@@ -6,7 +6,7 @@ use std::{future::Future, io, pin::Pin, sync::Arc, time::Duration};
 use anyhow::{Context, bail};
 use rustorr_cache::{Cache, CacheConfig, DiskStore, MemoryStore, PieceStore};
 use rustorr_engine::{Engine, EngineConfig, LibrqbitEngine};
-use rustorr_http::{Credentials, HttpConfig, ServerInfo};
+use rustorr_http::{Credentials, HttpConfig, Integrations, Msx, ServerInfo};
 use rustorr_lifecycle::{ClientCore, TorrentCoordinator};
 use rustorr_search::{RUTOR_URL, RutorDatabase, Search, SearchService};
 use rustorr_state::State;
@@ -98,20 +98,25 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         "listening"
     );
 
-    let search: Arc<dyn Search> = Arc::new(SearchService::new(RutorDatabase::new(
-        config.data_dir.join("rutor.ls"),
-        RUTOR_URL,
-    )));
+    let outbound = outbound_client()?;
+    let search: Arc<dyn Search> = Arc::new(SearchService::new(
+        RutorDatabase::new(config.data_dir.join("rutor.ls"), RUTOR_URL),
+        outbound.clone(),
+    ));
     search
         .set_rutor_enabled(torrents.settings().enable_rutor_search)
         .await;
+    let integrations = Integrations {
+        search,
+        msx: Arc::new(Msx::new(outbound, &config.data_dir)),
+    };
     let core: Arc<dyn ClientCore> = torrents;
     let outcome = serve_until_signalled(
         listener,
         &mut signals,
         config.shutdown_grace,
         core,
-        search,
+        integrations,
         http,
     )
     .await;
@@ -194,12 +199,23 @@ fn cache_store(config: &Config) -> Arc<dyn PieceStore> {
     }
 }
 
+/// The one client for every outbound request (Rutor, Torznab, MSX). Only
+/// connecting and each read are bounded, so the MSX proxy can stream long
+/// bodies; search requests add an overall timeout of their own.
+fn outbound_client() -> anyhow::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(60))
+        .build()
+        .context("cannot build the outbound HTTP client")
+}
+
 async fn serve_until_signalled(
     listener: TcpListener,
     signals: &mut Signals,
     grace: Duration,
     core: Arc<dyn ClientCore>,
-    search: Arc<dyn Search>,
+    integrations: Integrations,
     http: HttpConfig,
 ) -> anyhow::Result<()> {
     let (stop, stopped) = oneshot::channel::<()>();
@@ -211,7 +227,7 @@ async fn serve_until_signalled(
     };
     let requested = http.shutdown.clone().unwrap_or_default();
     let server =
-        rustorr_http::serve_with_services(listener, info, core, search, http, async move {
+        rustorr_http::serve_with_services(listener, info, core, integrations, http, async move {
             let _ = stopped.await;
         });
     tokio::pin!(server);

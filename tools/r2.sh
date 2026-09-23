@@ -120,7 +120,7 @@ capture() {
   fi
   if [ "${profile}" = r7 ]; then
     # The fake Torznab indexer answers both targets from the fixture network.
-    ${reference_compose} up -d indexer
+    ${reference_compose} up -d --force-recreate indexer
   fi
   if [ "${profile}" = proxy ]; then
     if [ "${target}" = reference ]; then

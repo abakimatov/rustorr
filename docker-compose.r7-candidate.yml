@@ -13,3 +13,5 @@ services:
     depends_on:
       rutor-seed:
         condition: service_completed_successfully
+    volumes:
+      - ./tools/contract/r7/msx-media:/srv/msx-media:ro

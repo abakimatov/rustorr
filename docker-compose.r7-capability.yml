@@ -10,6 +10,10 @@ services:
       NO_PROXY: tracker,seeder,indexer,127.0.0.1,localhost
     extra_hosts:
       - "indexer:172.31.250.30"
+    volumes:
+      # /files serves whatever directory POST /files links; both targets see
+      # the same fixture tree at the same path.
+      - ./tools/contract/r7/msx-media:/srv/msx-media:ro
 
   indexer:
     image: rustorr-r1-fixture

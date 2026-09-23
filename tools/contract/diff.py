@@ -72,15 +72,39 @@ def normalize_json(value: Any, paths: list[str]) -> tuple[Any, bool]:
     return value, changed
 
 
+def normalize_strings(value: Any, patterns: list[dict[str, str]]) -> tuple[Any, bool]:
+    """Rewrites dynamic fragments embedded in JSON strings, such as the peer
+    counts inside MSX status labels."""
+    if isinstance(value, str):
+        text = value
+        for rule in patterns:
+            text = re.sub(rule["pattern"], rule["replacement"], text)
+        return text, text != value
+    if isinstance(value, dict):
+        changed = False
+        for key, item in value.items():
+            value[key], item_changed = normalize_strings(item, patterns)
+            changed = changed or item_changed
+        return value, changed
+    if isinstance(value, list):
+        changed = False
+        for index, item in enumerate(value):
+            value[index], item_changed = normalize_strings(item, patterns)
+            changed = changed or item_changed
+        return value, changed
+    return value, False
+
+
 def comparable(case: dict[str, Any], normalization: dict[str, Any]) -> dict[str, Any]:
     response = case["response"]
     headers = normalize_headers(response.get("headers", {}), normalization.get("headers", {}))
     json_paths = normalization.get("json_paths", [])
     semantic_json, _ = normalize_json(response.get("json"), json_paths)
+    semantic_json, _ = normalize_strings(semantic_json, normalization.get("json_strings", []))
     # JSON is compared structurally. Content-Length is only a derived encoding
     # detail and an optional dynamic field may be present on one side only, so
     # normalize it whenever this manifest declares dynamic JSON paths.
-    if semantic_json is not None and json_paths:
+    if semantic_json is not None and (json_paths or normalization.get("json_strings")):
         headers.pop("content-length", None)
     result = {
         "id": case["id"],

@@ -85,6 +85,25 @@ def multipart_body(spec: dict[str, Any]) -> tuple[bytes, str]:
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def open_url(
+    req: urllib.request.Request,
+    timeout: float,
+    context: ssl.SSLContext | None,
+    follow: bool,
+) -> Any:
+    """urllib follows redirects on its own; a step observing the redirect
+    itself sets ``"follow_redirects": false`` and gets it as an HTTPError."""
+    if follow:
+        return urllib.request.urlopen(req, timeout=timeout, context=context)
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=context))
+    return opener.open(req, timeout=timeout)
+
+
 def request(
     base_url: str,
     scenario: dict[str, Any],
@@ -118,7 +137,7 @@ def request(
     payload = b""
     error: str | None = None
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=context) as response:
+        with open_url(req, timeout, context, follow=resolved.get("follow_redirects", True)) as response:
             status = response.status
             response_headers = dict(response.headers.items())
             payload = response.read()

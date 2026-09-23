@@ -3,7 +3,7 @@
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use quick_xml::{Reader, XmlVersion, events::Event};
 
-use crate::TorrentDetails;
+use crate::{TorrentDetails, service::REQUEST_TIMEOUT};
 
 /// Go's `url.QueryEscape` keeps only these besides ASCII letters and digits.
 const QUERY: &AsciiSet = &NON_ALPHANUMERIC
@@ -77,7 +77,12 @@ pub(crate) async fn search_one(
     indexer: &Indexer,
     query: &str,
 ) -> Option<Vec<TorrentDetails>> {
-    let response = client.get(search_url(indexer, query)).send().await.ok()?;
+    let response = client
+        .get(search_url(indexer, query))
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
     if response.status() != reqwest::StatusCode::OK {
         return None;
     }
@@ -94,6 +99,7 @@ pub(crate) async fn test(client: &reqwest::Client, host: &str, key: &str) -> Res
     let url = format!("{}api?apikey={}&t=caps", with_slash(&host), escape(key));
     let response = client
         .get(&url)
+        .timeout(REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|error| format!("Get \"{url}\": {error}"))?;

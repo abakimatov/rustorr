@@ -18,7 +18,7 @@ use axum::{
     },
     middleware::{Next, from_fn, from_fn_with_state, map_response},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use rustorr_lifecycle::{
     AddTorrent, CacheCommand, ClientCore, InfoHash, PlaybackRequest, Settings, SettingsCommand,
@@ -40,6 +40,7 @@ use crate::{
     access::{HttpConfig, WafSnapshot},
     error::go_json,
     m3u,
+    msx_api::{self, Msx},
     range::{self, ByteRange, RangeError},
     search_api, settings_api, web_api,
 };
@@ -49,11 +50,28 @@ pub struct ServerInfo {
     pub version: String,
 }
 
+/// Integrations beside the client core that the HTTP surface exposes.
+#[derive(Clone)]
+pub struct Integrations {
+    pub search: Arc<dyn Search>,
+    pub msx: Arc<Msx>,
+}
+
+impl Default for Integrations {
+    /// Nothing wired, as in router tests: no search, no media directory.
+    fn default() -> Self {
+        Self {
+            search: Arc::new(search_api::NoSearch),
+            msx: Arc::new(Msx::detached()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct AppState {
-    info: ServerInfo,
+    pub(crate) info: ServerInfo,
     pub(crate) core: Arc<dyn ClientCore>,
-    pub(crate) search: Arc<dyn Search>,
+    pub(crate) integrations: Integrations,
     pub(crate) http: HttpConfig,
 }
 
@@ -72,19 +90,19 @@ pub fn router_with_lifecycle(info: ServerInfo, torrents: Arc<TorrentCoordinator>
 }
 
 pub fn router_with_core(info: ServerInfo, core: Arc<dyn ClientCore>, http: HttpConfig) -> Router {
-    router_with_services(info, core, Arc::new(search_api::NoSearch), http)
+    router_with_services(info, core, Integrations::default(), http)
 }
 
 pub fn router_with_services(
     info: ServerInfo,
     core: Arc<dyn ClientCore>,
-    search: Arc<dyn Search>,
+    integrations: Integrations,
     http: HttpConfig,
 ) -> Router {
     let state = AppState {
         info,
         core,
-        search,
+        integrations,
         http,
     };
     let routes = Router::new()
@@ -121,6 +139,21 @@ pub fn router_with_services(
         .route("/download/{size}", get(web_api::download))
         .route("/shutdown", get(web_api::shutdown))
         .route("/shutdown/{*reason}", get(web_api::shutdown))
+        .route("/msx", get(msx_api::landing_redirect))
+        .route("/msx/", get(msx_api::landing))
+        .route(
+            "/msx/start.json",
+            get(msx_api::start).post(msx_api::set_start),
+        )
+        .route("/msx/trn", get(msx_api::saved).post(msx_api::status))
+        .route("/msx/proxy", any(msx_api::proxy))
+        .route("/msx/imdb/{id}", get(msx_api::imdb))
+        .route(
+            "/files",
+            get(msx_api::media_link).post(msx_api::set_media_link),
+        )
+        .route("/files/", get(msx_api::files).head(msx_api::files))
+        .route("/files/{*path}", get(msx_api::files).head(msx_api::files))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(state.clone())
@@ -171,13 +204,13 @@ pub async fn serve_with_services(
     listener: tokio::net::TcpListener,
     info: ServerInfo,
     core: Arc<dyn ClientCore>,
-    search: Arc<dyn Search>,
+    integrations: Integrations,
     http: HttpConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
     axum::serve(
         listener,
-        router_with_services(info, core, search, http)
+        router_with_services(info, core, integrations, http)
             .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown)
@@ -235,7 +268,7 @@ async fn echo_state(State(state): State<AppState>) -> String {
     state.info.version
 }
 
-fn peer(request: &Request<Body>) -> IpAddr {
+pub(crate) fn peer(request: &Request<Body>) -> IpAddr {
     request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -557,6 +590,7 @@ async fn settings(
     // settings it now has.
     if request.action != "get" {
         state
+            .integrations
             .search
             .set_rutor_enabled(settings.enable_rutor_search)
             .await;
@@ -1577,6 +1611,7 @@ fn head_routed(path: &str) -> bool {
         || under("/dav")
         || under("/mcp")
         || path == "/msx/proxy"
+        || path.starts_with("/files/")
 }
 
 async fn not_found() -> ApiError {
@@ -1633,6 +1668,23 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn playback_app() -> (Router, Arc<InMemoryClientCore>, InfoHash) {
+        let (core, hash) = playback_core();
+        let client: Arc<dyn ClientCore> = core.clone();
+        (
+            router_with_core(
+                ServerInfo {
+                    version: "MatriX.145".into(),
+                },
+                client,
+                HttpConfig::default(),
+            ),
+            core,
+            hash,
+        )
+    }
+
+    /// One working torrent with a ten-byte `video.mp4`.
+    pub(crate) fn playback_core() -> (Arc<InMemoryClientCore>, InfoHash) {
         let hash: InfoHash = "0101010101010101010101010101010101010101".parse().unwrap();
         let core = Arc::new(InMemoryClientCore::new());
         core.insert(
@@ -1666,18 +1718,7 @@ pub(crate) mod tests {
             HashMap::from([(1, (0..10).collect())]),
         )
         .unwrap();
-        let client: Arc<dyn ClientCore> = core.clone();
-        (
-            router_with_core(
-                ServerInfo {
-                    version: "MatriX.145".into(),
-                },
-                client,
-                HttpConfig::default(),
-            ),
-            core,
-            hash,
-        )
+        (core, hash)
     }
 
     #[tokio::test]

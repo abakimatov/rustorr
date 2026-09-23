@@ -112,13 +112,15 @@ impl HttpConfig {
             .any(|network| network.contains(&peer))
     }
 
-    pub fn public_base(&self, peer: IpAddr, headers: &HeaderMap, uri: &Uri) -> String {
+    /// The scheme clients reached the server with, as forwarded by a trusted
+    /// proxy.
+    pub fn public_scheme(&self, peer: IpAddr, headers: &HeaderMap, uri: &Uri) -> String {
         let trusted = self.trusts(peer);
         let forwarded = trusted
             .then(|| headers.get("forwarded")?.to_str().ok())
             .flatten()
             .and_then(parse_forwarded);
-        let scheme = forwarded
+        forwarded
             .as_ref()
             .and_then(|(proto, _)| proto.as_deref())
             .or_else(|| {
@@ -127,7 +129,17 @@ impl HttpConfig {
                     .flatten()
             })
             .filter(|scheme| matches!(*scheme, "http" | "https"))
-            .unwrap_or_else(|| uri.scheme_str().unwrap_or("http"));
+            .unwrap_or_else(|| uri.scheme_str().unwrap_or("http"))
+            .to_owned()
+    }
+
+    pub fn public_base(&self, peer: IpAddr, headers: &HeaderMap, uri: &Uri) -> String {
+        let trusted = self.trusts(peer);
+        let forwarded = trusted
+            .then(|| headers.get("forwarded")?.to_str().ok())
+            .flatten()
+            .and_then(parse_forwarded);
+        let scheme = self.public_scheme(peer, headers, uri);
         let host = forwarded
             .as_ref()
             .and_then(|(_, host)| host.as_deref())

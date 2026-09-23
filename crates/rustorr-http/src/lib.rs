@@ -7,7 +7,10 @@
 mod access;
 mod app;
 mod error;
+mod file_server;
+mod go_decode;
 mod m3u;
+mod msx_api;
 mod range;
 mod search_api;
 mod settings_api;
@@ -15,7 +18,8 @@ mod web_api;
 
 pub use access::{Credentials, HttpConfig};
 pub use app::{
-    ServerInfo, router, router_with_core, router_with_lifecycle, router_with_services, serve,
-    serve_with_core, serve_with_lifecycle, serve_with_services,
+    Integrations, ServerInfo, router, router_with_core, router_with_lifecycle,
+    router_with_services, serve, serve_with_core, serve_with_lifecycle, serve_with_services,
 };
 pub use error::ApiError;
+pub use msx_api::{MSX_LANDING_URL, Msx};
