@@ -30,7 +30,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     // Installed first so a signal that arrives during startup is not lost.
     let mut signals = Signals::install().context("cannot install signal handlers")?;
 
-    let http = HttpConfig {
+    let mut http = HttpConfig {
         credentials: config
             .http_auth
             .then(|| Credentials::read(&config.data_dir.join("accs.db")))
@@ -42,6 +42,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         max_stream_size: config.max_stream_size,
         search_without_auth: config.search_without_auth,
         webdav: config.webdav,
+        ffprobe: rustorr_http::locate_ffprobe(),
+        ..HttpConfig::default()
     };
 
     let listener = TcpListener::bind(config.listen)
@@ -50,6 +52,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let address = listener
         .local_addr()
         .context("cannot read the bound address")?;
+    http.port = address.port();
 
     tokio::fs::create_dir_all(&config.data_dir)
         .await

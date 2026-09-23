@@ -40,7 +40,7 @@ use crate::{
     access::{HttpConfig, WafSnapshot},
     discovery::{Discovery, DiscoveryChange, NoDiscovery},
     error::go_json,
-    m3u,
+    ffprobe_api, m3u,
     msx_api::{self, Msx},
     range::{self, ByteRange, RangeError},
     search_api, settings_api, web_api,
@@ -164,6 +164,8 @@ pub fn router_with_services(
         )
         .route("/files/", get(msx_api::files).head(msx_api::files))
         .route("/files/{*path}", get(msx_api::files).head(msx_api::files))
+        .route("/ffp/status", get(ffprobe_api::status))
+        .route("/ffp/{hash}/{id}", get(ffprobe_api::probe))
         .route("/dav", any(webdav::handle))
         .route("/dav/", any(webdav::handle))
         .route("/dav/{*path}", any(webdav::handle))
@@ -1089,7 +1091,7 @@ async fn shareable_link_exists(state: &AppState, link: &str) -> bool {
 
 async fn play(
     State(state): State<AppState>,
-    Path((hash, id)): Path<(String, u32)>,
+    Path((hash, id)): Path<(String, String)>,
     request: Request<Body>,
 ) -> Result<Response<Body>, Response<Body>> {
     let hash: InfoHash = hash
@@ -1113,7 +1115,26 @@ async fn play(
         Ok(TorrentReply::Torrent(Some(torrent))) => *torrent,
         _ => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
     };
-    raw_playback(state.core, state.http.max_stream_size, torrent, id, request).await
+    // A single-file torrent plays its file whatever the index says; otherwise
+    // the index must be a number (`strconv.Atoi`).
+    let index = if torrent.file_stats.len() == 1 {
+        torrent.file_stats[0].id
+    } else {
+        match id.parse::<i64>() {
+            Ok(-1) | Err(_) => {
+                return Err(ApiError::Status(StatusCode::BAD_REQUEST).into_response());
+            }
+            Ok(index) => u32::try_from(index).unwrap_or(u32::MAX),
+        }
+    };
+    raw_playback(
+        state.core,
+        state.http.max_stream_size,
+        torrent,
+        index,
+        request,
+    )
+    .await
 }
 
 async fn raw_playback(
@@ -1141,9 +1162,9 @@ async fn raw_playback(
         ));
     }
     let etag = file_etag(hash, &file.path);
-    let mime = mime_guess::from_path(&file.path)
-        .first_or_octet_stream()
-        .to_string();
+    // Go's type table with TorrServer's extensions, as ServeContent uses it.
+    let mime = crate::media_type::by_extension(&file.path)
+        .unwrap_or_else(|| "application/octet-stream".into());
     if precondition_failed(request.headers(), &etag, torrent.timestamp) {
         let mut response = StatusCode::PRECONDITION_FAILED.into_response();
         playback_headers(
@@ -1759,6 +1780,25 @@ pub(crate) mod tests {
         )
         .unwrap();
         (core, hash)
+    }
+
+    #[tokio::test]
+    async fn a_single_file_torrent_plays_whatever_index_is_asked() {
+        let (app, _, hash) = playback_app();
+        for index in ["1", "9", "x"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/play/{hash}/{index}"))
+                        .header(header::RANGE, "bytes=0-1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT, "{index}");
+        }
     }
 
     #[tokio::test]

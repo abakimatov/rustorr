@@ -39,7 +39,7 @@ services:
         - CMD-SHELL
         - >-
           test "$(transmission-remote 127.0.0.1:9091 --list 2>/dev/null |
-          grep -c '100%')" -eq 3
+          grep -c '100%')" -eq "$(wc -l < /data/torrents/all.txt)"
       interval: 1s
       timeout: 2s
       retries: 30

@@ -6,7 +6,9 @@
     "torrent_hash": "68c3ccdd52b2925f4f97e2f61ea248e728e54cea",
     "torrent_file": "/tmp/rustorr-contract/fixtures/torrents/single.torrent",
     "media_link": "file:///fixtures/torrents/unicode.torrent",
-    "media_hash": "d272ca49e3f32a0a08c0c0599a0a9daa6bf5cb7d"
+    "media_hash": "d272ca49e3f32a0a08c0c0599a0a9daa6bf5cb7d",
+    "clip_link": "file:///fixtures/torrents/clip.torrent",
+    "clip_hash": "95d1359c6ed7a1efa9e5bf9fab4d2cadbee9fdbf"
   },
   "normalization": {
     "headers": {
@@ -86,7 +88,8 @@
     {"id": "isolation-drop-single-after", "method": "POST", "path": "/torrents", "json": {"action": "drop", "hash": "${torrent_hash}"}, "auth": true, "expect_status": 200},
     {"id": "isolation-rem-single-after", "method": "POST", "path": "/torrents", "json": {"action": "rem", "hash": "${torrent_hash}"}, "auth": true, "expect_status": 200},
     {"id": "isolation-drop-media-after", "method": "POST", "path": "/torrents", "json": {"action": "drop", "hash": "${media_hash}"}, "auth": true, "expect_status": 200},
-    {"id": "isolation-rem-media-after", "method": "POST", "path": "/torrents", "json": {"action": "rem", "hash": "${media_hash}"}, "auth": true, "expect_status": 200}
+    {"id": "isolation-rem-media-after", "method": "POST", "path": "/torrents", "json": {"action": "rem", "hash": "${media_hash}"}, "auth": true, "expect_status": 200},
+    {"id": "isolation-viewed-clip-after", "method": "POST", "path": "/viewed", "json": {"action": "rem", "hash": "${clip_hash}", "file_index": -1}, "auth": true, "expect_status": 200}
   ],
   "global_teardown": [
     {"id": "global-waf-clear-after", "method": "POST", "path": "/waf", "json": {"whitelist": "", "blacklist": "", "referers": ""}, "auth": true, "expect_status": 200},
@@ -464,6 +467,11 @@
     {"id": "r7-dav-unlock-unknown", "area": "webdav", "method": "UNLOCK", "path": "/dav/", "headers": {"Lock-Token": "<1>"}, "classification": "core", "profiles": ["r7"], "auth": true},
     {"id": "r7-dav-unlock-no-token", "area": "webdav", "method": "UNLOCK", "path": "/dav/", "classification": "core", "profiles": ["r7"], "auth": true},
     {"id": "r7-dav-unknown-method", "area": "webdav", "method": "SEARCH", "path": "/dav/", "classification": "core", "profiles": ["r7"], "auth": true},
+    {"id": "r7-ffp-clip", "area": "ffprobe", "method": "GET", "path": "/ffp/${clip_hash}/1", "setup": [{"id": "add-clip", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${clip_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-clip", "wait_for_torrent": "${clip_hash}"}], "classification": "core", "profiles": ["r7"], "auth": true},
+    {"id": "r7-ffp-bad-index", "area": "ffprobe", "method": "GET", "path": "/ffp/${clip_hash}/9", "setup": [{"id": "add-clip", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${clip_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-clip", "wait_for_torrent": "${clip_hash}"}], "classification": "core", "profiles": ["r7"], "auth": true},
+    {"id": "r7-ffp-unknown", "area": "ffprobe", "method": "GET", "path": "/ffp/0123456789abcdef0123456789abcdef01234567/1", "classification": "core", "profiles": ["r7"], "auth": true},
+    {"id": "r7-ffp-no-index", "area": "ffprobe", "method": "GET", "path": "/ffp/${clip_hash}/", "classification": "core", "profiles": ["r7"], "auth": true},
+    {"id": "r7-play-single-any-index", "area": "playback", "method": "GET", "path": "/play/${clip_hash}/9", "headers": {"Range": "bytes=0-15"}, "setup": [{"id": "add-clip-play", "method": "POST", "path": "/torrents", "json": {"action": "add", "link": "${clip_link}", "save_to_db": true}, "auth": true, "expect_status": 200}, {"id": "wait-clip-play", "wait_for_torrent": "${clip_hash}"}], "classification": "core", "profiles": ["r7"], "auth": true},
     {"id": "r7-torznab-index-out", "area": "search", "method": "GET", "path": "/torznab/search/?query=Film&index=7", "setup": [{"id": "enable-torznab-index-out", "method": "POST", "path": "/settings", "json": {"action": "set", "sets": {"CacheSize": 67108864, "ReaderReadAHead": 75, "PreloadCache": 25, "UseDisk": false, "TorrentsSavePath": "", "RemoveCacheOnDrop": true, "ForceEncrypt": false, "RetrackersMode": 1, "TrackersListURL": "", "DefaultTrackers": "", "TorrentDisconnectTimeout": 30, "EnableDebug": false, "EnableDLNA": false, "EnableBonjour": true, "FriendlyName": "", "EnableRutorSearch": false, "EnableTorznabSearch": true, "TorznabUrls": [{"Host": "http://indexer:9117", "Key": "fixture-key", "Name": "Fake", "Categories": "", "CatType": "default"}], "TMDBSettings": {"APIKey": "", "APIURL": "https://api.themoviedb.org", "ImageURL": "https://image.tmdb.org", "ImageURLRu": "https://imagetmdb.com"}, "EnableIPv6": false, "DisableTCP": false, "DisableUTP": false, "DisableUPNP": false, "DisableDHT": false, "DisablePEX": false, "DisableUpload": false, "DownloadRateLimit": 0, "UploadRateLimit": 0, "ConnectionsLimit": 25, "PeersListenPort": 0, "EnableLPD": true, "LPDIPv6": false, "SslPort": 0, "SslCert": "", "SslKey": "", "ResponsiveMode": true, "ShowFSActiveTorr": true, "StoreSettingsInJson": true, "StoreViewedInJson": false, "TrackTimecode": true, "MergeAllM3U": false}}, "auth": true, "expect_status": 200}, {"id": "indexer-log-clear-index-out", "method": "GET", "url": "http://indexer:9117/_requests"}], "teardown": [{"id": "settings-def-after-index-out", "method": "POST", "path": "/settings", "json": {"action": "def"}, "auth": true, "expect_status": 200}], "classification": "core", "profiles": ["r7"], "auth": true}
   ]
 }

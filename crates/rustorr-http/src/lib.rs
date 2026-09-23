@@ -9,6 +9,7 @@ mod app;
 mod discovery;
 mod dlna;
 mod error;
+mod ffprobe_api;
 mod file_server;
 mod go_decode;
 mod m3u;
@@ -29,4 +30,5 @@ pub use app::{
 pub use discovery::{Discovery, DiscoveryChange, DiscoveryFuture};
 pub use dlna::{DlnaDevice, dlna_router, serve_dlna};
 pub use error::ApiError;
+pub use ffprobe_api::locate_ffprobe;
 pub use msx_api::{MSX_LANDING_URL, Msx};

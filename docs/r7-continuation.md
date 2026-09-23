@@ -1,6 +1,6 @@
 # Продолжение R7
 
-Статус: `in progress`; R7.0–R7.5 выполнены 2026-09-23.
+Статус: `in progress`; R7.0–R7.7 выполнены 2026-09-24 (R7.6 MCP отложен).
 
 План и решения пользователя — в [`r7-plan.md`](r7-plan.md).
 
@@ -361,6 +361,55 @@ R7.6–R7.8 (MCP, ffprobe, GStreamer). FUSE —
 идентичны после нормализации. Регрессия `direct`
 (`/tmp/rustorr-contract/r7-r75-direct/`) — 46 случаев, 0 core-различий.
 `tools/r4.sh check` — 285 тестов.
+
+## R7.6 — MCP отложен
+
+Решение пользователя 2026-09-23 (см. `r7-plan.md`): MCP уходит за первую
+версию вместе с Telegram-ботом. `/mcp` у Rustorr отвечает обычным `404`;
+сценарии `r7-mcp-*` и проба `deferred-mcp` профиля `direct` — в allowlist
+с этапом `post-R10`.
+
+## R7.7 — ffprobe
+
+- `GET /ffp/status` — `{"available": …}`: есть ли `ffprobe` в `PATH` или
+  рядом с исполняемым файлом (порядок `init` эталона).
+- `GET /ffp/:hash/:id` — `ffprobe -loglevel fatal -print_format json
+  -show_format -show_streams -show_chapters` по своему же
+  `http://127.0.0.1:<порт>/play/<hash>/<id>` с таймаутом минута. Ответ
+  пересобирается по структурам `vansante/go-ffprobe` v2.3.1: только их поля,
+  в их порядке, с нулевыми значениями Go для отсутствующих, `omitempty` где
+  он есть, числа-строки (`start_time`, `duration` формата) в Go-формате
+  float, `side_data_list` по типизированным структурам. Ошибки — тексты
+  go-ffprobe (`error getting data: error running /usr/bin/ffprobe [stderr]
+  exit status N`), без бинарника — `404 {"error":"ffprobe binary not
+  found"}`.
+- Попутно найдено расхождение R6 в `/play`: для однофайлового торрента
+  эталон играет единственный файл при любом индексе, а нечисловой индекс
+  многофайлового — `400`. Исправлено. Тип содержимого `/play` и `/stream`
+  теперь из общей таблицы `media_type` (для `.wav` — `audio/x-wav`, как у
+  эталона).
+- Образ: `Dockerfile` принимает `RUSTORR_RUNTIME_PACKAGES`; основной образ
+  без ffmpeg (`available: false`), вариант с `ffmpeg` —
+  `rustorr-r7-rustorr` в `docker-compose.r7-candidate.yml`.
+- Стенд: торрент-фикстура `clip.wav` (две секунды синуса, генерируется на
+  Python, хеши прежних фикстур не изменились) — первый настоящий медиафайл в
+  раздаче; проверка здоровья сидера считает раздачи по `all.txt`.
+
+Ограничения: несовпадение типа поля при разборе вывода ffprobe эталон
+превращает в ошибку `json: cannot unmarshal …`, Rustorr берёт нулевое
+значение.
+
+Изоляция: `clip` остаётся в каталоге между сценариями (повторное
+удаление и добавление вешает эталон с пиром в `pending`); очистка по
+умолчанию снимает только его отметку «просмотрено», иначе после
+переключения хранилища `viewedCount` расходится.
+
+Доказательства: `/tmp/rustorr-contract/r7-r77d/` — оба снимка `r7`
+действительны (193 случая); все сценарии `r7-ffp-*` и
+`r7-play-single-any-index` совпадают, отложенные различия (11) точно
+совпадают с allowlist; единственное core-различие — `r7-gst-settings`
+(R7.8). Регрессия `direct` (`/tmp/rustorr-contract/r7-r77d-direct/`) —
+46 случаев, 0 core-различий. `tools/r4.sh check` — 289 тестов.
 
 ## Команды
 

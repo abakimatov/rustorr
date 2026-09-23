@@ -165,7 +165,7 @@ capture() {
     if [ "${target}" = reference ]; then
       ${reference_compose} up -d --force-recreate torrserver
     else
-      ${candidate_compose} up -d --force-recreate rustorr
+      ${candidate_compose} up -d --build --force-recreate rustorr
     fi
     # Both servers bind before their torrent runtime is fully settled. Give
     # that runtime a bounded quiet interval before the isolated corpus starts.

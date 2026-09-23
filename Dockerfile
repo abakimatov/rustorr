@@ -39,10 +39,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 FROM debian:bookworm-slim AS runtime
 
+# Optional runtime capabilities, for example `ffmpeg` for /ffp; the default
+# image has none.
+ARG RUSTORR_RUNTIME_PACKAGES=""
+
 # rustls uses the system root store for HTTPS trackers. /data must already be
 # writable by this uid: Docker copies directory metadata into a new volume.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates ${RUSTORR_RUNTIME_PACKAGES} \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 65532 rustorr \
     && useradd --uid 65532 --gid rustorr --no-create-home --shell /usr/sbin/nologin rustorr \
