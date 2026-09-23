@@ -411,6 +411,68 @@ R7.6–R7.8 (MCP, ffprobe, GStreamer). FUSE —
 (R7.8). Регрессия `direct` (`/tmp/rustorr-contract/r7-r77d-direct/`) —
 46 случаев, 0 core-различий. `tools/r4.sh check` — 289 тестов.
 
+## Следующая сессия
+
+Состояние на 2026-09-24: ветка `r7-search`, последний коммит `0b6a520`
+(`feat(r7): add ffprobe and defer MCP`), рабочее дерево чистое. Последние
+доказательства — `/tmp/rustorr-contract/r7-r77d/` и `r7-r77d-direct/`
+(каталог `/tmp` между перезагрузками не сохраняется; при сомнениях
+переснять).
+
+Порядок работ:
+
+1. **Кэш снимка эталона — предложено, ждёт решения пользователя.** Полный
+   цикл сейчас занимает ~30 минут: снимок `r7` эталона и кандидата ~20
+   минут, регрессия `direct` ~8. Эталон между прогонами не меняется, поэтому
+   его снимок можно переиспользовать по ключу из хеша манифеста сценариев,
+   ID образа эталона и хеша фикстур; тогда снимается только кандидат. Без
+   одобрения не начинать.
+2. **R7.8 — GStreamer.** Сейчас у Rustorr нет маршрутов `/gst/*`, отсюда
+   единственное core-различие `r7-gst-settings` (эталон:
+   `200 {"built_in":false}`, Rustorr: `404`). Что известно из разведки:
+   - модуль эталона компилируется только с `-tags gst` (официальные
+     релизы `TorrServer-gst-linux-{amd64,arm64}` собраны с
+     `-tags "nosqlite gst"`), libgstreamer подгружается через
+     purego/dlopen; около 9 тыс. строк, 9 маршрутов (`/gst/settings`,
+     `/gst/remove`, `/gst/echo`, `/gst/:hash/{heartbeat,probe,master.m3u8,
+     video.m3u8,init.mp4,seg/*,subs/*}`);
+   - наш `Dockerfile.torrserver-r7` собран без тега, поэтому эталон отвечает
+     как сборка без GStreamer. Нужен второй вариант эталона с `-tags gst`
+     (библиотеки GStreamer в образе уже есть) и отдельный снимок для него;
+   - у Rustorr — cargo-feature `gstreamer` на gstreamer-rs, выключенная по
+     умолчанию. Без неё повторить заглушку эталона без тега (сверить по
+     исходникам, какие методы `/gst/settings` она обслуживает). С ней —
+     отдельный вариант образа: build-аргумент с features плюс
+     `RUSTORR_RUNTIME_PACKAGES` с пакетами GStreamer;
+   - для HLS, скорее всего, нужна видеофикстура: `clip.wav` — только аудио.
+     Генерировать так же, как `wav()` в `tools/baseline/generate-fixtures.py`,
+     без изменения хешей прежних фикстур.
+3. **R7.9 — оставшиеся флаги:** `--ip` (многократно), `--logpath`,
+   `--weblogpath`, `--dontkill`, `--pubipv4`/`--pubipv6`, `--torrentaddr`,
+   `--proxyurl`/`--proxymode`.
+4. **Закрытие R7** (см. критерий выхода в `r7-plan.md`):
+   - матрица возможностей по всем модулям (реализация, тест, статус amd64 и
+     arm64, зависимости, ограничения);
+   - allowlist: убрать устаревшие пробы профиля `direct` к несуществующим
+     путям (`deferred-storage`, `deferred-tmdb`, `deferred-ffprobe`,
+     `deferred-webdav`, `deferred-dlna`, `deferred-gstreamer`) или перевести
+     их в обычные сценарии; пересмотреть этап у `r7-stat` и
+     `r7-dlna-root-desc-default-name` (сейчас `R7`): оставить осознанным
+     различием с обоснованием или закрыть;
+   - «Открытые пробелы R7.0» выше частично устарели (медиафикстура для
+     ffprobe есть, SSDP/mDNS-пробы сделаны); обновить при закрытии.
+
+Особенности стенда, которые легко забыть:
+- `cargo` на хосте нет, только `tools/r4.sh cargo …`; полная проверка —
+  `tools/r4.sh check` (сейчас 289 тестов).
+- `tools/r2.sh capture candidate` пересобирает образ `rustorr-r7-rustorr`
+  (с `ffmpeg`), поэтому отдельная сборка кандидата не нужна.
+- Торрент `clip` не удаляется между сценариями: повторные `rem`/`add`
+  вешают эталон с пиром в `pending`, и снимок эталона становится
+  недействительным.
+- Снимок `r7` останавливает вторую цель; DLNA и Bonjour идут через
+  internal macvlan-сеть `discovery`.
+
 ## Команды
 
 ```sh
@@ -422,4 +484,19 @@ RUSTORR_CONTRACT_RUN_ID=r7-run tools/r2.sh capture reference --profile r7
 RUSTORR_CONTRACT_RUN_ID=r7-run tools/r2.sh capture candidate --profile r7
 tools/r2.sh diff /tmp/rustorr-contract/r7-run/reference.json \
   /tmp/rustorr-contract/r7-run/candidate.json /tmp/rustorr-contract/r7-run/diff.json
+
+# регрессия R6
+RUSTORR_CONTRACT_RUN_ID=r7-run-direct tools/r2.sh capture reference --profile direct
+RUSTORR_CONTRACT_RUN_ID=r7-run-direct tools/r2.sh capture candidate --profile direct
+tools/r2.sh diff /tmp/rustorr-contract/r7-run-direct/reference.json \
+  /tmp/rustorr-contract/r7-run-direct/candidate.json \
+  /tmp/rustorr-contract/r7-run-direct/diff.json
+
+# FUSE
+RUSTORR_CONTRACT_RUN_ID=r7-run-fuse tools/r2.sh fuse-probe reference
+RUSTORR_CONTRACT_RUN_ID=r7-run-fuse tools/r2.sh fuse-probe candidate
+
+# отдельные сценарии
+RUSTORR_CONTRACT_RUN_ID=r7-one tools/r2.sh capture candidate --profile r7 \
+  --only r7-ffp-clip,r7-ffp-bad-index
 ```
