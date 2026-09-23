@@ -2694,6 +2694,7 @@ dependencies = [
  "mime_guess",
  "percent-encoding",
  "rustorr-lifecycle",
+ "rustorr-search",
  "serde",
  "serde_json",
  "tempfile",
@@ -2725,6 +2726,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustorr-search"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "percent-encoding",
+ "quick-xml",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rustorr-server"
 version = "0.1.0"
 dependencies = [
@@ -2736,6 +2752,7 @@ dependencies = [
  "rustorr-engine",
  "rustorr-http",
  "rustorr-lifecycle",
+ "rustorr-search",
  "rustorr-state",
  "serde_json",
  "tempfile",

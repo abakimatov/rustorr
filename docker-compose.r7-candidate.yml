@@ -1,0 +1,15 @@
+services:
+  # Rustorr reads <data-dir>/rutor.ls like the reference; a fresh fixture copy
+  # keeps it from downloading the database.
+  rutor-seed:
+    image: rustorr-r1-fixture
+    command: ["python3", "/r7/fixtures.py", "/data"]
+    volumes:
+      - ./tools/contract/r7:/r7:ro
+      - rustorr-r6-state:/data
+    networks: [baseline]
+
+  rustorr:
+    depends_on:
+      rutor-seed:
+        condition: service_completed_successfully

@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 rustorr-lifecycle.workspace = true
+rustorr-search.workspace = true
 axum.workspace = true
 serde_json.workspace = true
 serde.workspace = true

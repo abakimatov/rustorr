@@ -17,6 +17,25 @@ pub enum ApiError {
     Status(StatusCode),
 }
 
+/// JSON as Go's `encoding/json` writes it, which gin's `c.JSON` uses: `<`,
+/// `>`, `&`, U+2028 and U+2029 are escaped. They can only occur inside
+/// strings, so escaping the serialised bytes is safe.
+pub(crate) fn go_json(value: &impl serde::Serialize) -> serde_json::Result<Vec<u8>> {
+    let text = serde_json::to_string(value)?;
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '<' => escaped.push_str("\\u003c"),
+            '>' => escaped.push_str("\\u003e"),
+            '&' => escaped.push_str("\\u0026"),
+            '\u{2028}' => escaped.push_str("\\u2028"),
+            '\u{2029}' => escaped.push_str("\\u2029"),
+            other => escaped.push(other),
+        }
+    }
+    Ok(escaped.into_bytes())
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
@@ -29,7 +48,8 @@ impl IntoResponse for ApiError {
             Self::Json { status, message } => (
                 status,
                 [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-                serde_json::json!({ "error": message }).to_string(),
+                go_json(&serde_json::json!({ "error": message }))
+                    .expect("an error message serialises"),
             )
                 .into_response(),
             Self::Status(status) => status.into_response(),
@@ -52,6 +72,14 @@ mod tests {
             .map(|value| value.to_str().unwrap().to_owned());
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         (status, content_type, body.to_vec())
+    }
+
+    #[test]
+    fn json_is_html_escaped_like_go() {
+        assert_eq!(
+            go_json(&serde_json::json!({"magnet": "a&b<c>\u{2028}"})).unwrap(),
+            br#"{"magnet":"a\u0026b\u003cc\u003e\u2028"}"#
+        );
     }
 
     #[tokio::test]
