@@ -53,6 +53,29 @@ tools/r2.sh tls-down
 `https://127.0.0.1:8444`; для обоих локальных TLS-снимков используйте
 `--insecure`.
 
+## Кэш снимка эталона
+
+Зафиксированный эталон между прогонами не меняется, поэтому
+`tools/r2.sh capture reference` переиспользует действительный снимок. Ключ
+(`tools/contract/reference_cache.py`) — SHA-256 от аргументов снимка, адреса
+цели, `RUSTORR_RESET_SEEDER`, торрент-фикстуры, исходников стенда (`run.py`,
+`scenarios.json`, `accs.db`, `tools/contract/docker`, `tools/contract/r7`,
+генераторов фикстур и Dockerfile'ов `tools/baseline/docker`), разрешённой
+compose-конфигурации стороны эталона и ID её образов. Сервисы кандидата
+(`rustorr`, `r6proxy`) в ключ не входят: пересборка Rustorr кэш не сбрасывает,
+а allowlist и `diff.py` на снимок не влияют.
+
+При попадании снимок копируется в `<run>/reference.json` без запуска эталона.
+Сохраняется только действительный корпус; ключ после снимка пересчитывается,
+потому что образы могли собраться по ходу. Входы ключа лежат рядом —
+`<run>/reference.cache-key.json` и `<cache>/<key>.key.json`, по ним видно,
+почему случился промах. `RUSTORR_REFERENCE_CACHE=refresh` переснимает эталон и
+заменяет запись, `=off` обходит кэш; каталог —
+`RUSTORR_REFERENCE_CACHE_DIR` (по умолчанию `<run-root>/reference-cache`).
+
+`tools/r2.sh compare <run-id> [аргументы снимка]` снимает эталон (из кэша,
+если можно), кандидата и пишет `<run>/diff.json`.
+
 ## Профили
 
 Сценарий без поля `profiles` входит только в `direct`; профили `auth` и

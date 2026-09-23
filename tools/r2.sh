@@ -13,7 +13,7 @@ RUN_ROOT=${RUSTORR_CONTRACT_RUN_ROOT:-/tmp/rustorr-contract}
 MANIFEST=${ROOT}/tools/contract/scenarios.json
 ALLOWLIST=${ROOT}/tools/contract/deferred-routes.json
 
-usage() { printf '%s\n' "usage: $0 {doctor|config|up|fuse-probe|candidate-up|candidate-down|auth-reference-up|auth-candidate-up|proxy-up|candidate-proxy-up|proxy-down|candidate-proxy-down|tls-up|tls-down|reset-seeder|restart-matrix|capture|diff|down}"; }
+usage() { printf '%s\n' "usage: $0 {doctor|config|up|fuse-probe|candidate-up|candidate-down|auth-reference-up|auth-candidate-up|proxy-up|candidate-proxy-up|proxy-down|candidate-proxy-down|tls-up|tls-down|reset-seeder|restart-matrix|capture|compare|diff|down}"; }
 doctor() { command -v docker >/dev/null 2>&1 || { echo "error: docker CLI is not installed" >&2; return 1; }; docker compose version >/dev/null 2>&1 || { echo "error: docker compose is unavailable" >&2; return 1; }; docker info >/dev/null 2>&1 || { echo "error: Docker daemon is unavailable" >&2; return 1; }; }
 config() { ${COMPOSE} config; }
 up() { doctor; ${COMPOSE} up -d --force-recreate tracker seeder torrserver; }
@@ -151,6 +151,24 @@ capture() {
   run_id=${RUSTORR_CONTRACT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
   output_dir=${RUN_ROOT}/${run_id}
   mkdir -p "${output_dir}"
+  torrent_file=$(host_fixtures)
+  # The pinned reference does not change between runs: a valid corpus is
+  # reused while its key (tools/contract/reference_cache.py) stays the same.
+  # RUSTORR_REFERENCE_CACHE=refresh recaptures and replaces it, =off bypasses
+  # the cache entirely.
+  cache_mode=${RUSTORR_REFERENCE_CACHE:-on}
+  cache_dir=${RUSTORR_REFERENCE_CACHE_DIR:-${RUN_ROOT}/reference-cache}
+  case "${profile}" in proxy) cache_compose=${PROXY_COMPOSE} ;; *) cache_compose=${reference_compose} ;; esac
+  if [ "${target}" = reference ] && [ "${cache_mode}" = on ]; then
+    cache_key=$(reference_cache_describe "$@")
+    if [ -s "${cache_dir}/${cache_key}.json" ]; then
+      cp "${cache_dir}/${cache_key}.json" "${output_dir}/${target}.json"
+      echo "reference cache: hit ${cache_key}" >&2
+      printf '%s\n' "${output_dir}/${target}.json"
+      return 0
+    fi
+    echo "reference cache: miss ${cache_key}" >&2
+  fi
   if [ "${profile}" = r7 ]; then
     # Both targets announce the same Bonjour and DLNA names on the discovery
     # network; only the target under test may be running.
@@ -185,7 +203,6 @@ capture() {
     fi
     set -- "$@" --insecure
   fi
-  torrent_file=$(host_fixtures)
   docker run --rm --network rustorr-r1_baseline \
     -v "${ROOT}:/workspace:ro" \
     -v "${RUN_ROOT}:${RUN_ROOT}" \
@@ -195,6 +212,26 @@ capture() {
     python3 tools/contract/run.py --base-url "${base_url}" \
       --manifest tools/contract/scenarios.json --torrent-file "${torrent_file}" \
       --output "${output_dir}/${target}.json" "$@"
+  if [ "${target}" = reference ] && [ "${cache_mode}" != off ]; then
+    # Images may have been built by this capture: key it by the state it ran in.
+    reference_cache_describe "$@" >/dev/null
+    python3 "${ROOT}/tools/contract/reference_cache.py" store --cache-dir "${cache_dir}" \
+      --describe "${output_dir}/${target}.cache-key.json" "${output_dir}/${target}.json"
+  fi
+}
+reference_cache_describe() {
+  ${cache_compose} config --format json | python3 "${ROOT}/tools/contract/reference_cache.py" key \
+    --root "${ROOT}" --base-url "${base_url}" --reset-seeder "${RUSTORR_RESET_SEEDER:-1}" \
+    --torrent-file "${torrent_file}" --describe "${output_dir}/${target}.cache-key.json" -- "$@"
+}
+# Reference (from the cache when possible), candidate and diff in one run.
+compare() {
+  run_id=${1:?compare needs a run id}
+  shift
+  output_dir=${RUN_ROOT}/${run_id}
+  RUSTORR_CONTRACT_RUN_ID=${run_id} capture reference "$@"
+  RUSTORR_CONTRACT_RUN_ID=${run_id} capture candidate "$@"
+  diff_corpus "${output_dir}/reference.json" "${output_dir}/candidate.json" "${output_dir}/diff.json"
 }
 restart_matrix() {
   target=${1:?restart-matrix target is required: reference or candidate}
@@ -221,5 +258,5 @@ diff_corpus() { reference=${1:?reference corpus is required}; candidate=${2:?can
 
 command=${1:-}; shift || true
 case "${command}" in
-  doctor) doctor ;; config) config ;; up) up ;; candidate-up) candidate_up ;; candidate-down) candidate_down ;; auth-reference-up) auth_reference_up ;; auth-candidate-up) auth_candidate_up ;; proxy-up) proxy_up ;; candidate-proxy-up) candidate_proxy_up ;; proxy-down) proxy_down ;; candidate-proxy-down) candidate_proxy_down ;; tls-up) tls_up ;; tls-down) tls_down ;; reset-seeder) reset_seeder ;; restart-matrix) restart_matrix "$@" ;; fuse-probe) fuse_probe "$@" ;; capture) capture "$@" ;; diff) diff_corpus "$@" ;; down) down ;; *) usage >&2; exit 2 ;;
+  doctor) doctor ;; config) config ;; up) up ;; candidate-up) candidate_up ;; candidate-down) candidate_down ;; auth-reference-up) auth_reference_up ;; auth-candidate-up) auth_candidate_up ;; proxy-up) proxy_up ;; candidate-proxy-up) candidate_proxy_up ;; proxy-down) proxy_down ;; candidate-proxy-down) candidate_proxy_down ;; tls-up) tls_up ;; tls-down) tls_down ;; reset-seeder) reset_seeder ;; restart-matrix) restart_matrix "$@" ;; fuse-probe) fuse_probe "$@" ;; capture) capture "$@" ;; compare) compare "$@" ;; diff) diff_corpus "$@" ;; down) down ;; *) usage >&2; exit 2 ;;
 esac
