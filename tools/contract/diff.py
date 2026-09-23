@@ -62,6 +62,37 @@ def canonical_dav_xml(body: bytes) -> bytes | None:
     return declaration + json.dumps(canon(root, ""), ensure_ascii=False).encode()
 
 
+MP4_CONTAINERS = {b"moov", b"trak", b"mdia"}
+MP4_TIMED = {b"mvhd", b"tkhd", b"mdhd"}
+
+
+def mp4_without_times(body: bytes) -> bytes:
+    """mp4mux stamps mvhd, tkhd and mdhd with the wall-clock time the stream
+    started; the reference's own init segments differ there between runs.
+    Only those creation and modification fields are zeroed."""
+    data = bytearray(body)
+
+    def walk(start: int, end: int) -> None:
+        position = start
+        while position + 8 <= end:
+            size = int.from_bytes(data[position:position + 4], "big")
+            kind = bytes(data[position + 4:position + 8])
+            if size < 8 or position + size > end:
+                return
+            if kind in MP4_CONTAINERS:
+                walk(position + 8, position + size)
+            elif kind in MP4_TIMED and size >= 12:
+                version = data[position + 8]
+                width = 8 if version == 1 else 4
+                fields = position + 12
+                if fields + 2 * width <= position + size:
+                    data[fields:fields + 2 * width] = bytes(2 * width)
+            position += size
+
+    walk(0, len(data))
+    return bytes(data)
+
+
 def normalize_headers(headers: dict[str, str], rules: dict[str, str]) -> dict[str, str]:
     normalized = {key.lower(): value for key, value in headers.items()}
     for key, rule in rules.items():
@@ -173,6 +204,8 @@ def comparable(case: dict[str, Any], normalization: dict[str, Any]) -> dict[str,
         canonical = canonical_dav_xml(body) if "xml" in content_type else None
         if canonical is not None:
             body = canonical
+        if content_type == "video/mp4":
+            body = mp4_without_times(body)
         result["body_sha256"] = hashlib.sha256(body).hexdigest()
         result["body_bytes"] = len(body)
     return result

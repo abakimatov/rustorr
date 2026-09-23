@@ -24,16 +24,29 @@ ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
     CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
 
+# Development files of the target architecture for optional features, for
+# example the GStreamer ones for `gstreamer`. Multiarch packages sit beside
+# the cross toolchains; pkg-config is pointed at them per target below.
+ARG RUSTORR_BUILD_PACKAGES=""
+RUN if [ -n "${RUSTORR_BUILD_PACKAGES}" ]; then \
+        dpkg --add-architecture "${TARGETARCH}" \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends pkg-config \
+            $(for package in ${RUSTORR_BUILD_PACKAGES}; do printf '%s:%s ' "${package}" "${TARGETARCH}"; done) \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/target,sharing=locked \
     case "${TARGETARCH}" in \
-        arm64) target=aarch64-unknown-linux-gnu ;; \
-        amd64) target=x86_64-unknown-linux-gnu ;; \
+        arm64) target=aarch64-unknown-linux-gnu; multiarch=aarch64-linux-gnu ;; \
+        amd64) target=x86_64-unknown-linux-gnu; multiarch=x86_64-linux-gnu ;; \
         *) echo "unsupported target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
+    && export PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_PATH="/usr/lib/${multiarch}/pkgconfig" \
     && cargo build --locked --release --package rustorr-server --target "${target}" ${RUSTORR_FEATURES:+--features "${RUSTORR_FEATURES}"} \
     && install -D -m 0755 "target/${target}/release/rustorr" /out/rustorr
 

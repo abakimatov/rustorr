@@ -9,6 +9,8 @@ R6_PROXY_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r6-proxy.yml"
 AUTH_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r6-auth.yml"
 R7_REFERENCE_COMPOSE="${COMPOSE} -f ${ROOT}/docker-compose.r7-capability.yml"
 R7_CANDIDATE_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r7-capability.yml -f ${ROOT}/docker-compose.r7-candidate.yml"
+R7_GST_REFERENCE_COMPOSE="${R7_REFERENCE_COMPOSE} -f ${ROOT}/docker-compose.r7-gst.yml"
+R7_GST_CANDIDATE_COMPOSE="${R7_CANDIDATE_COMPOSE} -f ${ROOT}/docker-compose.r7-gst-candidate.yml"
 RUN_ROOT=${RUSTORR_CONTRACT_RUN_ROOT:-/tmp/rustorr-contract}
 MANIFEST=${ROOT}/tools/contract/scenarios.json
 ALLOWLIST=${ROOT}/tools/contract/deferred-routes.json
@@ -134,6 +136,7 @@ capture() {
   case "${profile}" in
     auth) reference_compose=${AUTH_COMPOSE}; candidate_compose=${AUTH_COMPOSE} ;;
     r7) reference_compose=${R7_REFERENCE_COMPOSE}; candidate_compose=${R7_CANDIDATE_COMPOSE} ;;
+    r7-gst) reference_compose=${R7_GST_REFERENCE_COMPOSE}; candidate_compose=${R7_GST_CANDIDATE_COMPOSE} ;;
     *) reference_compose=${COMPOSE}; candidate_compose=${R6_COMPOSE} ;;
   esac
   case "${target}:${profile}" in
@@ -173,7 +176,7 @@ capture() {
     fi
     echo "reference cache: miss ${cache_key}" >&2
   fi
-  if [ "${profile}" = r7 ]; then
+  if [ "${profile}" = r7 ] || [ "${profile}" = r7-gst ]; then
     # Both targets announce the same Bonjour and DLNA names on the discovery
     # network; only the target under test may be running.
     if [ "${target}" = reference ]; then
@@ -187,13 +190,17 @@ capture() {
     if [ "${target}" = reference ]; then
       ${reference_compose} up -d --force-recreate torrserver
     else
-      ${candidate_compose} up -d --build --force-recreate rustorr
+      # Only Rustorr is rebuilt: `up --build` would rebuild the fixture
+      # images too, and their new IDs would needlessly change the key of
+      # the cached reference corpus.
+      ${candidate_compose} build rustorr
+      ${candidate_compose} up -d --force-recreate rustorr
     fi
     # Both servers bind before their torrent runtime is fully settled. Give
     # that runtime a bounded quiet interval before the isolated corpus starts.
     sleep 2
   fi
-  if [ "${profile}" = r7 ]; then
+  if [ "${profile}" = r7 ] || [ "${profile}" = r7-gst ]; then
     # The fake Torznab indexer answers both targets from the fixture network.
     ${reference_compose} up -d --force-recreate indexer
   fi

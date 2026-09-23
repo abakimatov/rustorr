@@ -295,7 +295,7 @@ fn restarts_on_the_same_data_directory_without_touching_what_is_stored() {
     assert!(first.wait_for_exit().status.success());
     {
         let state = rustorr_state::State::open(&database).unwrap();
-        assert_eq!(state.schema_version().unwrap(), 2);
+        assert_eq!(state.schema_version().unwrap(), 3);
         state.set_settings("{\"CacheSize\": 12345}").unwrap();
     }
 
@@ -305,7 +305,7 @@ fn restarts_on_the_same_data_directory_without_touching_what_is_stored() {
         .iter()
         .find(|event| event["fields"]["message"] == "listening")
         .expect("the second start listens");
-    assert_eq!(started["fields"]["schema_version"], 2);
+    assert_eq!(started["fields"]["schema_version"], 3);
     assert_eq!(http_get(second.address(), "/echo").0, "HTTP/1.1 200 OK");
     second.signal("TERM");
     assert!(second.wait_for_exit().status.success());

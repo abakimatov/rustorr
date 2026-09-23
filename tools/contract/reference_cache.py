@@ -20,7 +20,7 @@ import subprocess
 import sys
 from typing import Any
 
-SCHEMA = "rustorr.reference-cache.v1"
+SCHEMA = "rustorr.reference-cache.v2"
 CANDIDATE_SERVICES = {"rustorr", "r6proxy"}
 INPUTS = (
     "tools/contract/run.py",
@@ -46,15 +46,20 @@ def file_digests(root: pathlib.Path) -> dict[str, str]:
 
 
 def image_id(image: str) -> str:
+    """The image's content: its layers and runtime configuration. With the
+    containerd image store `.Id` is the index digest, which a rebuild from
+    cache changes (fresh provenance metadata) although nothing inside did."""
     result = subprocess.run(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+        ["docker", "image", "inspect", "--format", "{{json .RootFS.Layers}} {{json .Config}}", image],
         capture_output=True,
         text=True,
         check=False,
     )
     # A missing image makes the key unique to this state: the capture builds
     # the image, and such a corpus is not stored.
-    return result.stdout.strip() if result.returncode == 0 else f"missing:{image}"
+    if result.returncode != 0:
+        return f"missing:{image}"
+    return "sha256:" + hashlib.sha256(result.stdout.strip().encode()).hexdigest()
 
 
 def reference_side(compose: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:

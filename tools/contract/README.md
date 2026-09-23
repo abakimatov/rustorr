@@ -60,9 +60,12 @@ tools/r2.sh tls-down
 (`tools/contract/reference_cache.py`) — SHA-256 от аргументов снимка, адреса
 цели, `RUSTORR_RESET_SEEDER`, торрент-фикстуры, исходников стенда (`run.py`,
 `scenarios.json`, `accs.db`, `tools/contract/docker`, `tools/contract/r7`,
-генераторов фикстур), разрешённой compose-конфигурации стороны эталона и ID
-её образов. Dockerfile'ы в ключ не входят: снимок определяет собранный образ,
-а не его рецепт. Сервисы кандидата
+генераторов фикстур), разрешённой compose-конфигурации стороны эталона и
+содержимого её образов — слоёв и конфигурации (с хранилищем containerd `Id`
+образа меняется при каждой пересборке из кэша, хотя содержимое то же).
+Dockerfile'ы в ключ не входят: снимок определяет собранный образ, а не его
+рецепт. Кандидат пересобирается только сам (`compose build rustorr`), без
+образов стенда. Сервисы кандидата
 (`rustorr`, `r6proxy`) в ключ не входят: пересборка Rustorr кэш не сбрасывает,
 а allowlist и `diff.py` на снимок не влияют.
 
@@ -94,6 +97,16 @@ tools/r2.sh tls-down
   `Host`; `X-Forwarded-Host`/`X-Forwarded-Proto` выставляет сам nginx. После
   пересоздания цели nginx перезапускается, потому что разрешает upstream один
   раз при старте.
+
+- `r7` — функциональные модули R7 против эталона с `ffprobe` и `--webdav`
+  (`docker-compose.r7-capability.yml`, кандидат — `r7-candidate`).
+- `r7-gst` — модуль GStreamer (R7.8): эталон, собранный с `-tags gst`
+  (`docker-compose.r7-gst.yml`), против Rustorr с feature `gstreamer`
+  (`docker-compose.r7-gst-candidate.yml`). Фикстура — `movie.mkv`
+  (`tools/baseline/fixture_media.py`). В ответах `video/mp4` `diff.py`
+  обнуляет время создания и изменения в `mvhd`/`tkhd`/`mdhd`: mp4mux пишет
+  туда время запуска, и init-сегменты самого эталона различаются между
+  прогонами. Остальные байты init и сегментов сравниваются точно.
 
 Сценарии, которые строят абсолютные URL (`m3u-unicode`,
 `playlist-individual`, `auth-share-playlist`), фиксируют `Host`, иначе имена

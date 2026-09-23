@@ -12,6 +12,7 @@ import shutil
 import sys
 from typing import Any
 
+from fixture_media import matroska
 from fixture_payload import SEED, payload
 
 TRACKER = b"http://tracker:6969/announce"
@@ -49,8 +50,9 @@ def wav(size: int) -> bytes:
 
 def write_file(path: pathlib.Path, size: int, content: str = "payload") -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if content == "wav":
-        data = wav(size)
+    if content in ("wav", "mkv"):
+        data = wav(size) if content == "wav" else matroska()
+        assert len(data) == size
         path.write_bytes(data)
         return hashlib.sha256(data).hexdigest()
     digest = hashlib.sha256()
@@ -120,6 +122,9 @@ def main(destination: str) -> None:
         },
         # Two seconds of a real WAV for media inspection (R7.7).
         "clip": {"name": "clip.wav", "files": [("clip.wav", 44 + 2 * 16000)], "content": "wav"},
+        # Eight seconds of H.264, PCM audio and UTF-8 subtitles in Matroska
+        # with Cues, for the GStreamer HLS module (R7.8).
+        "movie": {"name": "movie.mkv", "files": [("movie.mkv", len(matroska()))], "content": "mkv"},
     }
     manifest = {"piece_length": PIECE_LENGTH, "seed": SEED.decode(), "torrents": {}}
     torrent_lines = []

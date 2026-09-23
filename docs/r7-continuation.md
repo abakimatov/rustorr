@@ -1,6 +1,6 @@
 # Продолжение R7
 
-Статус: `in progress`; R7.0–R7.7 выполнены 2026-09-24 (R7.6 MCP отложен).
+Статус: `in progress`; R7.0–R7.8 выполнены 2026-09-24 (R7.6 MCP отложен).
 
 План и решения пользователя — в [`r7-plan.md`](r7-plan.md).
 
@@ -411,67 +411,131 @@ R7.6–R7.8 (MCP, ffprobe, GStreamer). FUSE —
 (R7.8). Регрессия `direct` (`/tmp/rustorr-contract/r7-r77d-direct/`) —
 46 случаев, 0 core-различий. `tools/r4.sh check` — 289 тестов.
 
+## R7.8 — GStreamer
+
+- Сборка без GStreamer (основной образ) отвечает как эталон без `-tags gst`:
+  `GET /gst/settings` → `{"built_in":false}`, `POST` → `404
+  {"error":"gstreamer is not built in"}`, других маршрутов `/gst` нет.
+- Новый крейт `rustorr-gstreamer` — порт `server/gstreamer`. Всегда
+  собираются и тестируются: конфиг (`Config`, нормализация, сохранённый
+  документ), разбор вывода `gst-discoverer-1.0 -v`, таймлайн Matroska Cues
+  (HTTP Range-чтения своего `/stream`), перепаковка фрагментов mp4mux в
+  HLS-сегменты (`mp4box`, построчный порт с теми же текстами ошибок), разбор
+  init-сегмента (кодеки, размер, диапазон), хранилище WebVTT-субтитров,
+  плейлисты master/video/subs, сервис задач (кэш проб на час, заморозка
+  неактивных задач после `InactiveMinutes` и удаление через 20 минут,
+  `MaxTasks`). Раннер пайплайна на gstreamer-rs — за feature `runtime`: те же
+  описания `gst_parse_launch`, флаги перемотки, pad-пробы
+  (`videoStartProbe`, `videoSegmentClipProbe`), таймауты и перебор
+  аппаратных кодеров.
+- `rustorr-server` получает feature `gstreamer` (линкует libgstreamer);
+  `rustorr-http` монтирует `/gst/*` только при переданном рантайме.
+  `/gst/settings` — за HTTP-авторизацией, HLS-маршруты — без неё, как у
+  эталона. Разбор `POST /gst/settings` повторяет `encoding/json`
+  (регистронезависимые ключи, `null`, тексты `json: cannot unmarshal …`),
+  `--rdb` → `403 read-only mode`. Настройки модуля хранятся в новой таблице
+  SQLite `module_settings` (миграция V3), как у эталона — отдельным ключом
+  `Settings/gstreamer`.
+- `/torrents` `rem`, `drop` и `wipe` снимают HLS-задачу торрента.
+- Попутно найдено расхождение R6: gin сопоставляет `/stream/*fname` и
+  `/playlist/*fname` с пустым хвостом (`/stream/?link=…`, это URL источника
+  GStreamer), axum — нет. Добавлены маршруты `/stream/` и `/playlist/` и
+  сценарий `stream-empty-name` профиля `direct`.
+- Образы: эталон `rustorr-r7-torrserver-gst` — тот же `Dockerfile.torrserver-r7`
+  с `TORRSERVER_TAGS=gst` и `gstreamer1.0-plugins-base-apps`
+  (`gst-discoverer-1.0`); кандидат `rustorr-r7-rustorr-gst` —
+  `RUSTORR_FEATURES=gstreamer`, новый build-аргумент
+  `RUSTORR_BUILD_PACKAGES` (dev-пакеты целевой архитектуры через multiarch и
+  `PKG_CONFIG_PATH`) и пакеты GStreamer в `RUSTORR_RUNTIME_PACKAGES`.
+  Dev-образ `tools/r4/Dockerfile.dev` несёт dev-пакеты GStreamer, и
+  `tools/r4.sh check` линтует сборку с `gstreamer` и тестирует `runtime`.
+- Стенд: профиль `r7-gst` (`docker-compose.r7-gst.yml`,
+  `docker-compose.r7-gst-candidate.yml`), фикстура `movie.mkv` —
+  8 секунд H.264 из I_PCM-макроблоков, PCM-звук, субтитры UTF-8 и Cues,
+  собирается на Python (`tools/baseline/fixture_media.py`) без кодеков,
+  хеши прежних фикстур не изменились. `diff.py` обнуляет время
+  создания/изменения в `mvhd`/`tkhd`/`mdhd` ответов `video/mp4`: mp4mux
+  пишет туда текущее время, и init-сегменты самого эталона различаются
+  между запусками.
+
+Ограничения:
+- Рантайм линкуется, а не подгружается через `dlopen`, как у эталона
+  (purego): бинарник с `gstreamer` без библиотек не запустится, поэтому это
+  отдельный вариант образа. `found` в `/gst/echo` поэтому всегда `true`.
+- Шина пайплайна опрашивается синхронно при чтении appsink, а не отдельной
+  горутиной: ошибка простаивающего пайплайна замечается при следующем
+  запросе, а не сразу.
+- Пробы и создание задач сериализованы одним замком на сервис (у эталона —
+  singleflight по ключу).
+- `GST_REGISTRY` задаётся окружением образа (Rust без `unsafe` не меняет
+  окружение процесса); эталон выставляет его сам.
+- Встроенный Windows-рантайм эталона (`embedded_runtime`) не переносится:
+  всегда `{"found":false,…}`, как у Linux-сборки эталона.
+
+Кэш эталона (решение пользователя 2026-09-24): `tools/r2.sh capture
+reference` переиспользует действительный снимок по ключу из аргументов,
+исходников стенда, compose-конфигурации эталона и ID его образов (см.
+`tools/contract/README.md`); `tools/r2.sh compare <run> --profile …` снимает
+обе цели и пишет `diff.json`. Любая правка `scenarios.json` меняет ключ всех
+профилей.
+
+Стенд, мелочи: `r7-magnets-order` получил паузу 1,1 с между добавлениями
+(время добавления у эталона секундное, при равенстве порядок случаен);
+глобальная подготовка сбрасывает «просмотрено» для `clip` и `movie` — том
+состояния кандидата общий у профилей `r7` и `r7-gst`.
+
+Доказательства: `/tmp/rustorr-contract/r78-final-gst/` — оба снимка
+`r7-gst` действительны (36 случаев), 0 core-различий: HLS-сегменты (в том
+числе после перемотки и с Range), плейлисты, WebVTT и init-сегменты (после
+нормализации времени mp4mux) совпадают байт в байт. `r7`
+(`/tmp/rustorr-contract/r78-final-r7/`) — 196 случаев, 0 core-различий,
+отложенные различия (11) точно совпадают с allowlist. Регрессия `direct`
+(`/tmp/rustorr-contract/r78-final3-direct/`, после исправления `&stat`) —
+47 случаев, 0 core-различий. `tools/r4.sh check` — 351 тест.
+
+Попутно в `direct`: `/stream?…&stat` отдавал снимок ответа на добавление
+(`stat: 0`), а эталон — `tor.Status()` уже загруженного торрента; теперь
+текущий вид торрента.
+
 ## Следующая сессия
 
-Состояние на 2026-09-24: ветка `r7-search`, последний коммит `0b6a520`
-(`feat(r7): add ffprobe and defer MCP`), рабочее дерево чистое. Последние
-доказательства — `/tmp/rustorr-contract/r7-r77d/` и `r7-r77d-direct/`
-(каталог `/tmp` между перезагрузками не сохраняется; при сомнениях
-переснять).
+Состояние на 2026-09-24: ветка `r7-search`, R7.0–R7.8 выполнены (R7.6 MCP
+отложен). Последние доказательства — в разделе R7.8 (каталог `/tmp` между
+перезагрузками не сохраняется; при сомнениях переснять).
 
 Порядок работ:
 
-1. **Кэш снимка эталона — предложено, ждёт решения пользователя.** Полный
-   цикл сейчас занимает ~30 минут: снимок `r7` эталона и кандидата ~20
-   минут, регрессия `direct` ~8. Эталон между прогонами не меняется, поэтому
-   его снимок можно переиспользовать по ключу из хеша манифеста сценариев,
-   ID образа эталона и хеша фикстур; тогда снимается только кандидат. Без
-   одобрения не начинать.
-2. **R7.8 — GStreamer.** Сейчас у Rustorr нет маршрутов `/gst/*`, отсюда
-   единственное core-различие `r7-gst-settings` (эталон:
-   `200 {"built_in":false}`, Rustorr: `404`). Что известно из разведки:
-   - модуль эталона компилируется только с `-tags gst` (официальные
-     релизы `TorrServer-gst-linux-{amd64,arm64}` собраны с
-     `-tags "nosqlite gst"`), libgstreamer подгружается через
-     purego/dlopen; около 9 тыс. строк, 9 маршрутов (`/gst/settings`,
-     `/gst/remove`, `/gst/echo`, `/gst/:hash/{heartbeat,probe,master.m3u8,
-     video.m3u8,init.mp4,seg/*,subs/*}`);
-   - наш `Dockerfile.torrserver-r7` собран без тега, поэтому эталон отвечает
-     как сборка без GStreamer. Нужен второй вариант эталона с `-tags gst`
-     (библиотеки GStreamer в образе уже есть) и отдельный снимок для него;
-   - у Rustorr — cargo-feature `gstreamer` на gstreamer-rs, выключенная по
-     умолчанию. Без неё повторить заглушку эталона без тега (сверить по
-     исходникам, какие методы `/gst/settings` она обслуживает). С ней —
-     отдельный вариант образа: build-аргумент с features плюс
-     `RUSTORR_RUNTIME_PACKAGES` с пакетами GStreamer;
-   - для HLS, скорее всего, нужна видеофикстура: `clip.wav` — только аудио.
-     Генерировать так же, как `wav()` в `tools/baseline/generate-fixtures.py`,
-     без изменения хешей прежних фикстур.
-3. **R7.9 — оставшиеся флаги:** `--ip` (многократно), `--logpath`,
+1. **R7.9 — оставшиеся флаги:** `--ip` (многократно), `--logpath`,
    `--weblogpath`, `--dontkill`, `--pubipv4`/`--pubipv6`, `--torrentaddr`,
-   `--proxyurl`/`--proxymode`.
-4. **Закрытие R7** (см. критерий выхода в `r7-plan.md`):
+   `--proxyurl`/`--proxymode` (у эталона без `--proxymode` при заданном
+   `--proxyurl` режим `tracker`, неизвестный режим тоже сводится к
+   `tracker`).
+2. **Закрытие R7** (см. критерий выхода в `r7-plan.md`):
    - матрица возможностей по всем модулям (реализация, тест, статус amd64 и
-     arm64, зависимости, ограничения);
+     arm64, зависимости, ограничения); для GStreamer — проверить
+     кросс-сборку варианта `gstreamer` под amd64 (`RUSTORR_BUILD_PACKAGES`
+     через multiarch);
    - allowlist: убрать устаревшие пробы профиля `direct` к несуществующим
      путям (`deferred-storage`, `deferred-tmdb`, `deferred-ffprobe`,
      `deferred-webdav`, `deferred-dlna`, `deferred-gstreamer`) или перевести
      их в обычные сценарии; пересмотреть этап у `r7-stat` и
      `r7-dlna-root-desc-default-name` (сейчас `R7`): оставить осознанным
      различием с обоснованием или закрыть;
-   - «Открытые пробелы R7.0» выше частично устарели (медиафикстура для
-     ffprobe есть, SSDP/mDNS-пробы сделаны); обновить при закрытии.
+   - «Открытые пробелы R7.0» выше частично устарели (медиафикстуры для
+     ffprobe и GStreamer есть, SSDP/mDNS-пробы сделаны); обновить.
 
 Особенности стенда, которые легко забыть:
 - `cargo` на хосте нет, только `tools/r4.sh cargo …`; полная проверка —
-  `tools/r4.sh check` (сейчас 289 тестов).
-- `tools/r2.sh capture candidate` пересобирает образ `rustorr-r7-rustorr`
-  (с `ffmpeg`), поэтому отдельная сборка кандидата не нужна.
-- Торрент `clip` не удаляется между сценариями: повторные `rem`/`add`
-  вешают эталон с пиром в `pending`, и снимок эталона становится
+  `tools/r4.sh check` (сейчас 351 тест, включая сборку с `gstreamer`).
+- `tools/r2.sh capture candidate` пересобирает образ кандидата профиля
+  (`rustorr-r7-rustorr` с `ffmpeg`, `rustorr-r7-rustorr-gst` с GStreamer).
+  Образ эталона `rustorr-r7-torrserver-gst` собирается вручную (см.
+  «Команды»).
+- Торренты `clip` и `movie` не удаляются между сценариями: повторные
+  `rem`/`add` вешают эталон с пиром в `pending`, и снимок эталона становится
   недействительным.
-- Снимок `r7` останавливает вторую цель; DLNA и Bonjour идут через
-  internal macvlan-сеть `discovery`.
+- Снимки `r7` и `r7-gst` останавливают вторую цель; DLNA и Bonjour идут
+  через internal macvlan-сеть `discovery`.
 
 ## Команды
 
@@ -484,6 +548,11 @@ RUSTORR_CONTRACT_RUN_ID=r7-run tools/r2.sh capture reference --profile r7
 RUSTORR_CONTRACT_RUN_ID=r7-run tools/r2.sh capture candidate --profile r7
 tools/r2.sh diff /tmp/rustorr-contract/r7-run/reference.json \
   /tmp/rustorr-contract/r7-run/candidate.json /tmp/rustorr-contract/r7-run/diff.json
+
+# GStreamer (R7.8)
+docker compose -f docker-compose.baseline.yml -f docker-compose.r2-hermetic.yml \
+  -f docker-compose.r7-capability.yml -f docker-compose.r7-gst.yml build torrserver
+tools/r2.sh compare r7-gst-run --profile r7-gst
 
 # регрессия R6
 RUSTORR_CONTRACT_RUN_ID=r7-run-direct tools/r2.sh capture reference --profile direct

@@ -17,9 +17,10 @@ ALLOWED = {
     "rustorr-lifecycle": {"rustorr-domain", "rustorr-engine", "rustorr-cache", "rustorr-state"},
     "rustorr-search": set(),
     "rustorr-discovery": set(),
+    "rustorr-gstreamer": set(),
     "rustorr-vfs": {"rustorr-lifecycle"},
     "rustorr-fuse": {"rustorr-lifecycle", "rustorr-vfs"},
-    "rustorr-http": {"rustorr-lifecycle", "rustorr-search", "rustorr-vfs"},
+    "rustorr-http": {"rustorr-lifecycle", "rustorr-search", "rustorr-vfs", "rustorr-gstreamer"},
     "rustorr-server": {
         "rustorr-domain",
         "rustorr-engine",
@@ -31,6 +32,7 @@ ALLOWED = {
         "rustorr-discovery",
         "rustorr-vfs",
         "rustorr-fuse",
+        "rustorr-gstreamer",
     },
 }
 
@@ -44,6 +46,7 @@ EXTERNAL_OWNERS = {
     "axum": {"rustorr-http"},
     "tower": {"rustorr-http"},
     "rusqlite": {"rustorr-state"},
+    "gstreamer": {"rustorr-gstreamer"},
     "libsqlite3-sys": {"rustorr-state"},
 }
 

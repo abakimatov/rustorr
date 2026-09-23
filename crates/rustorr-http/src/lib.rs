@@ -32,4 +32,5 @@ pub use discovery::{Discovery, DiscoveryChange, DiscoveryFuture};
 pub use dlna::{DlnaDevice, dlna_router, serve_dlna};
 pub use error::ApiError;
 pub use ffprobe_api::locate_ffprobe;
+pub use gstreamer_api::GstreamerSetup;
 pub use msx_api::{MSX_LANDING_URL, Msx};

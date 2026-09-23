@@ -133,6 +133,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         search,
         msx: Arc::new(Msx::new(outbound, &config.data_dir)),
         discovery: Arc::clone(&discovery) as Arc<dyn rustorr_http::Discovery>,
+        gstreamer: gstreamer_setup(&state),
     };
     let outcome = serve_until_signalled(
         listener,
@@ -206,6 +207,40 @@ async fn start_test_control(torrents: Arc<TorrentCoordinator>) -> anyhow::Result
         }
     });
     Ok(())
+}
+
+/// The GStreamer module, in builds with the `gstreamer` feature; its
+/// settings live in the state database beside the main settings.
+#[cfg(feature = "gstreamer")]
+fn gstreamer_setup(state: &Arc<State>) -> Option<rustorr_http::GstreamerSetup> {
+    use rustorr_gstreamer::{
+        pipeline::{GstRuntime, SharedRuntime},
+        service::ConfigStore,
+    };
+
+    struct Store(Arc<State>);
+
+    impl ConfigStore for Store {
+        fn load(&self) -> Option<String> {
+            self.0.module_settings("gstreamer").ok().flatten()
+        }
+
+        fn save(&self, document: &str) -> Result<(), String> {
+            self.0
+                .set_module_settings("gstreamer", document)
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    Some(rustorr_http::GstreamerSetup {
+        runtime: Arc::new(SharedRuntime(Arc::new(GstRuntime::new()))),
+        store: Arc::new(Store(Arc::clone(state))),
+    })
+}
+
+#[cfg(not(feature = "gstreamer"))]
+fn gstreamer_setup(_state: &Arc<State>) -> Option<rustorr_http::GstreamerSetup> {
+    None
 }
 
 /// The state API is synchronous, so it is opened off the async threads.

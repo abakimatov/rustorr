@@ -13,6 +13,9 @@ path = "src/main.rs"
 default = ["fuse"]
 # The FUSE mount (`--fuse-path`); fuser mounts without libfuse.
 fuse = ["dep:rustorr-fuse"]
+# The GStreamer HLS module (`/gst`): links libgstreamer, so the binary needs
+# GStreamer at run time. The default build answers as a build without it.
+gstreamer = ["dep:rustorr-gstreamer", "rustorr-gstreamer/runtime"]
 r5-test-control = []
 
 [dependencies]
@@ -25,6 +28,7 @@ rustorr-lifecycle.workspace = true
 rustorr-search.workspace = true
 rustorr-discovery.workspace = true
 rustorr-fuse = { workspace = true, optional = true }
+rustorr-gstreamer = { workspace = true, optional = true }
 anyhow.workspace = true
 clap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "signal", "sync", "time", "fs", "io-util"] }

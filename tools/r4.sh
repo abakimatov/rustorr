@@ -64,6 +64,9 @@ check() {
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
+    # The GStreamer variant links libgstreamer; the dev image carries it.
+    cargo clippy --package rustorr-server --all-targets --locked --features gstreamer -- -D warnings
+    cargo test --package rustorr-gstreamer --locked --features runtime
   '
 }
 

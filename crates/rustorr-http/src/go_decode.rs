@@ -54,7 +54,7 @@ pub(crate) fn data_field(input: &[u8]) -> Result<String, String> {
     error.map_or(Ok(data), Err)
 }
 
-fn kind(value: &Value) -> &'static str {
+pub(crate) fn kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "bool",
@@ -65,18 +65,18 @@ fn kind(value: &Value) -> &'static str {
     }
 }
 
-fn first_value(input: &[u8]) -> Result<Value, String> {
+pub(crate) fn first_value(input: &[u8]) -> Result<Value, String> {
     let end = scan(input)?;
     serde_json::from_slice(&input[..end]).map_err(|error| error.to_string())
 }
 
-fn ordered(input: &[u8]) -> Result<OrderedObject, String> {
+pub(crate) fn ordered(input: &[u8]) -> Result<OrderedObject, String> {
     let end = scan(input)?;
     serde_json::from_slice(&input[..end]).map_err(|error| error.to_string())
 }
 
 /// An object's members in document order, duplicates kept.
-struct OrderedObject(Vec<(String, Value)>);
+pub(crate) struct OrderedObject(pub(crate) Vec<(String, Value)>);
 
 impl<'de> Deserialize<'de> for OrderedObject {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {

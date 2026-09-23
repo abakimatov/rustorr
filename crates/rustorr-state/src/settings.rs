@@ -36,6 +36,40 @@ impl State {
             })
     }
 
+    /// A module's own settings document, as it was saved.
+    pub fn module_settings(&self, module: &str) -> Result<Option<String>, Error> {
+        self.connection()
+            .query_row(
+                "SELECT document FROM module_settings WHERE module = ?1",
+                [module],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(database("load module settings"))
+    }
+
+    /// Replaces a module's settings document; it has to be valid JSON.
+    pub fn set_module_settings(&self, module: &str, document: &str) -> Result<(), Error> {
+        self.connection()
+            .execute(
+                "INSERT INTO module_settings (module, document) VALUES (?1, ?2)
+                 ON CONFLICT (module) DO UPDATE SET document = excluded.document",
+                [module, document],
+            )
+            .map(drop)
+            .map_err(|error| match error {
+                rusqlite::Error::SqliteFailure(failure, _)
+                    if failure.code == ErrorCode::ConstraintViolation =>
+                {
+                    Error::InvalidValue {
+                        field: "module settings document",
+                        reason: "is not valid JSON",
+                    }
+                }
+                other => database("save module settings")(other),
+            })
+    }
+
     /// Forgets the saved document, so the caller falls back to its defaults.
     pub fn reset_settings(&self) -> Result<(), Error> {
         self.connection()
@@ -50,6 +84,24 @@ mod tests {
     use super::*;
 
     const DOCUMENT: &str = "{\n  \"CacheSize\": 67108864,\n  \"TMDBSettings\": {\"APIURL\": \"https://api.themoviedb.org\"},\n  \"TorznabUrls\": null,\n  \"FriendlyName\": \"Гостиная\"\n}";
+
+    #[test]
+    fn module_settings_are_kept_per_module() {
+        let state = State::open_in_memory().unwrap();
+        assert_eq!(state.module_settings("gstreamer").unwrap(), None);
+        state
+            .set_module_settings("gstreamer", r#"{"SegmentSeconds":4}"#)
+            .unwrap();
+        state
+            .set_module_settings("gstreamer", r#"{"SegmentSeconds":6}"#)
+            .unwrap();
+        assert_eq!(
+            state.module_settings("gstreamer").unwrap().as_deref(),
+            Some(r#"{"SegmentSeconds":6}"#)
+        );
+        assert_eq!(state.module_settings("other").unwrap(), None);
+        assert!(state.set_module_settings("gstreamer", "{").is_err());
+    }
 
     #[test]
     fn there_are_no_settings_until_some_are_saved() {

@@ -614,7 +614,7 @@ def main() -> None:
     parser.add_argument("--torrent-hash")
     parser.add_argument("--torrent-file", type=pathlib.Path)
     parser.add_argument("--basic-auth", help="user:password for setup and scenarios marked auth")
-    parser.add_argument("--profile", choices=("direct", "auth", "proxy", "r7"), default="direct")
+    parser.add_argument("--profile", choices=("direct", "auth", "proxy", "r7", "r7-gst"), default="direct")
     parser.add_argument("--only", help="comma-separated scenario IDs to capture")
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--readiness-timeout", type=float, default=90)

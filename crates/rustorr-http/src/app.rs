@@ -40,7 +40,9 @@ use crate::{
     access::{HttpConfig, WafSnapshot},
     discovery::{Discovery, DiscoveryChange, NoDiscovery},
     error::go_json,
-    ffprobe_api, gstreamer_api, m3u,
+    ffprobe_api,
+    gstreamer_api::{self, GstreamerSetup},
+    m3u,
     msx_api::{self, Msx},
     range::{self, ByteRange, RangeError},
     search_api, settings_api, web_api,
@@ -58,6 +60,9 @@ pub struct Integrations {
     pub search: Arc<dyn Search>,
     pub msx: Arc<Msx>,
     pub discovery: Arc<dyn Discovery>,
+    /// The GStreamer HLS module; without it `/gst` answers as a build
+    /// without GStreamer.
+    pub gstreamer: Option<GstreamerSetup>,
 }
 
 impl Default for Integrations {
@@ -67,6 +72,7 @@ impl Default for Integrations {
             search: Arc::new(search_api::NoSearch),
             msx: Arc::new(Msx::detached()),
             discovery: Arc::new(NoDiscovery),
+            gstreamer: None,
         }
     }
 }
@@ -79,6 +85,8 @@ pub(crate) struct AppState {
     pub(crate) http: HttpConfig,
     /// Present when `/dav` is enabled.
     pub(crate) webdav: Option<Arc<WebDav>>,
+    /// Present when a GStreamer runtime was provided.
+    pub(crate) gstreamer: Option<Arc<rustorr_gstreamer::service::Service>>,
 }
 
 pub fn router(info: ServerInfo) -> Router {
@@ -108,12 +116,17 @@ pub fn router_with_services(
     let webdav = http
         .webdav
         .then(|| Arc::new(WebDav::new(Arc::clone(&core))));
+    let gstreamer = integrations
+        .gstreamer
+        .as_ref()
+        .map(|setup| gstreamer_api::build_service(setup, Arc::clone(&core), http.port));
     let state = AppState {
         info,
         core,
         integrations,
         http,
         webdav,
+        gstreamer,
     };
     let routes = Router::new()
         .route("/echo", get(echo_state))
@@ -124,9 +137,13 @@ pub fn router_with_services(
         .route("/cache", post(cache))
         .route("/waf", get(get_waf).post(set_waf))
         .route("/stream", get(stream_root).head(stream_root))
+        // gin's `/stream/*fname` also matches `/stream/`, which GStreamer's
+        // source URL uses; an axum wildcard needs a character after the slash.
+        .route("/stream/", get(stream_root).head(stream_root))
         .route("/stream/{*fname}", get(stream_named).head(stream_named))
         .route("/play/{hash}/{id}", get(play).head(play))
         .route("/playlist", get(playlist_root))
+        .route("/playlist/", get(playlist_root))
         .route("/playlist/{*fname}", get(playlist_named))
         .route("/playlistall/all.m3u", get(playlist_all))
         .route("/", get(web_api::root))
@@ -174,7 +191,13 @@ pub fn router_with_services(
         .route("/dav/", any(webdav::handle))
         .route("/dav/{*path}", any(webdav::handle))
         .fallback(not_found)
-        .method_not_allowed_fallback(not_found)
+        .method_not_allowed_fallback(not_found);
+    let routes = if state.gstreamer.is_some() {
+        gstreamer_api::routes(routes)
+    } else {
+        routes
+    };
+    let routes = routes
         .with_state(state.clone())
         .layer(from_fn(head_only_where_routed))
         .layer(CatchPanicLayer::custom(panicked));
@@ -490,11 +513,28 @@ async fn torrents(
         command,
         TorrentCommand::Add(_) | TorrentCommand::Remove(_) | TorrentCommand::Wipe
     );
+    // The reference drops the torrent's HLS task with it.
+    let removed_tasks: Vec<String> = match &command {
+        TorrentCommand::Remove(hash) | TorrentCommand::Drop(hash) => vec![hash.to_string()],
+        TorrentCommand::Wipe if state.gstreamer.is_some() => {
+            match state.core.torrents(TorrentCommand::List).await {
+                Ok(TorrentReply::List(torrents)) => torrents
+                    .iter()
+                    .filter_map(|torrent| torrent.hash.clone())
+                    .collect(),
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    };
     let reply = state
         .core
         .torrents(command)
         .await
         .map_err(|error| lifecycle(error).into_response())?;
+    for hash in &removed_tasks {
+        gstreamer_api::remove_task(&state, hash);
+    }
     // MatriX.145 restarts its DLNA server after these, when it is enabled.
     if changes_catalog
         && state
@@ -788,8 +828,17 @@ async fn cache(
         .hash
         .parse()
         .map_err(|_| json_bad_request("invalid info hash").into_response())?;
-    let cache = state
-        .core
+    let view = cache_view(state.core.as_ref(), hash).await?;
+    json_response(view).map_err(IntoResponse::into_response)
+}
+
+/// The cache state `/cache` and `/gst/:hash/heartbeat` report: `404` when the
+/// torrent is not loaded.
+pub(crate) async fn cache_view(
+    core: &dyn ClientCore,
+    hash: InfoHash,
+) -> Result<impl Serialize + use<>, Response<Body>> {
+    let cache = core
         .cache(CacheCommand::Get(hash))
         .await
         .map_err(|_| StatusCode::NOT_FOUND.into_response())?;
@@ -797,8 +846,7 @@ async fn cache(
         .snapshots
         .first()
         .ok_or_else(|| StatusCode::NOT_FOUND.into_response())?;
-    let torrent = match state
-        .core
+    let torrent = match core
         .torrents(TorrentCommand::Get(hash))
         .await
         .map_err(|error| lifecycle(error).into_response())?
@@ -841,7 +889,7 @@ async fn cache(
             })
             .collect()
     };
-    json_response(CacheResponse {
+    Ok(CacheResponse {
         hash: hash.to_string(),
         capacity: cache.capacity,
         filled: if snapshot.demanded_bytes == 0 {
@@ -865,7 +913,6 @@ async fn cache(
             })
             .collect(),
     })
-    .map_err(IntoResponse::into_response)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1048,7 +1095,16 @@ async fn stream_impl(
         drop(playback);
     }
     if query.contains_key("stat") {
-        return json_response(torrent).map_err(IntoResponse::into_response);
+        // `tor.Status()` after the add: an already running torrent reports
+        // its current state, not the add's snapshot.
+        let current = match torrent.hash() {
+            Some(hash) => match state.core.torrents(TorrentCommand::Get(hash)).await {
+                Ok(TorrentReply::Torrent(Some(current))) => *current,
+                _ => torrent,
+            },
+            None => torrent,
+        };
+        return json_response(current).map_err(IntoResponse::into_response);
     }
     if playlist {
         let base = state
