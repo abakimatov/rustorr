@@ -475,6 +475,19 @@ impl TorrentCoordinator {
             view.stat_string = "Torrent added".into();
             return Ok(view);
         }
+        // A catalog entry keeps its metainfo: a saved torrent added again by
+        // its hash or a magnet (as `/play` and `/stream` do after a drop or
+        // the idle timeout) needs no peer to send the metadata, as MatriX.145
+        // loads it from its database.
+        let source = match source_hash {
+            Some(hash) if !matches!(source, TorrentSource::TorrentBytes(_)) => {
+                match self.state.metainfo(hash)? {
+                    Some(metainfo) => TorrentSource::TorrentBytes(metainfo),
+                    None => source,
+                }
+            }
+            _ => source,
+        };
         let initial_peers = match source_hash {
             Some(hash) => self
                 .peer_hints
@@ -1159,6 +1172,7 @@ mod tests {
         status: EngineStatus,
         loaded: StdMutex<HashSet<InfoHash>>,
         add_options: StdMutex<Vec<(InfoHash, AddOptions)>>,
+        sources: StdMutex<Vec<&'static str>>,
         blocked_writers: StdMutex<Vec<tokio::io::DuplexStream>>,
         reader_offsets: StdMutex<Vec<u64>>,
         fail_delete: AtomicBool,
@@ -1177,6 +1191,7 @@ mod tests {
                 },
                 loaded: StdMutex::new(HashSet::new()),
                 add_options: StdMutex::new(Vec::new()),
+                sources: StdMutex::new(Vec::new()),
                 blocked_writers: StdMutex::new(Vec::new()),
                 reader_offsets: StdMutex::new(Vec::new()),
                 fail_delete: AtomicBool::new(false),
@@ -1239,6 +1254,11 @@ mod tests {
                     .unwrap();
                 self.loaded.lock().unwrap().insert(hash);
                 self.add_options.lock().unwrap().push((hash, options));
+                self.sources.lock().unwrap().push(match source {
+                    TorrentSource::TorrentBytes(_) => "metainfo",
+                    TorrentSource::Magnet(_) => "magnet",
+                    TorrentSource::Url(_) => "url",
+                });
                 Ok(TorrentMetadata {
                     hash,
                     metainfo: vec![byte],
@@ -1425,6 +1445,45 @@ mod tests {
 
         assert!(!fixture.engine.is_loaded(entry.hash));
         assert!(fixture.state.torrent(entry.hash).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_saved_torrent_added_again_by_hash_uses_its_stored_metainfo() {
+        let fixture = Fixture::new(1_000);
+        let entry = fixture.add(1).await;
+        assert!(fixture.coordinator.drop_live(entry.hash).await.unwrap());
+        assert!(!fixture.engine.is_loaded(entry.hash));
+        assert!(fixture.state.torrent(entry.hash).unwrap().is_some());
+
+        let view = fixture
+            .coordinator
+            .add_torrent(AddTorrent {
+                link: entry.hash.to_string(),
+                ..AddTorrent::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(view.hash, Some(entry.hash.to_string()));
+        assert_eq!(
+            *fixture.engine.sources.lock().unwrap(),
+            ["metainfo", "metainfo"]
+        );
+        assert!(fixture.engine.is_loaded(entry.hash));
+    }
+
+    #[tokio::test]
+    async fn an_unknown_hash_is_added_as_a_magnet() {
+        let fixture = Fixture::new(1_000);
+        fixture
+            .coordinator
+            .add_torrent(AddTorrent {
+                link: FakeEngine::hash(1).to_string(),
+                ..AddTorrent::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(*fixture.engine.sources.lock().unwrap(), ["magnet"]);
     }
 
     #[tokio::test]

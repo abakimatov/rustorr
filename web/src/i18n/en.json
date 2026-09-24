@@ -114,5 +114,28 @@
     "externalPlayer": "In an external player",
     "fromLast": "Playlist from the last watched",
     "stats": "Statistics"
+  },
+  "player": {
+    "label": "Player",
+    "playing": "playing",
+    "mode": "Playback method",
+    "direct": "Direct",
+    "hls": "HLS",
+    "audio": "Audio",
+    "subtitles": "Subtitles",
+    "off": "Off",
+    "channels_one": "{{count}} channel",
+    "channels_few": "{{count}} channels",
+    "channels_many": "{{count}} channels",
+    "channels_other": "{{count}} channels",
+    "track": "Track {{index}}",
+    "resumed": "Resumed at {{time}}",
+    "fromStart": "From the start",
+    "failed": "The browser could not play this file",
+    "cannotPlay": "The browser does not support this format or codec.",
+    "noHls": "The browser does not support HLS.",
+    "tryHls": "Try HLS",
+    "tryDirect": "Play directly",
+    "hlsNote": "HLS: the server repackages the file with GStreamer, with audio and subtitle choice. Starting and seeking may take a few seconds."
   }
 }

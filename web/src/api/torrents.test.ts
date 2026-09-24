@@ -71,7 +71,7 @@ describe('links', () => {
   const file = { id: 1, path: 'Медиа коллекция/01 Пример/Фильм.mkv', length: 524288 }
 
   it('point players at the server routes', () => {
-    expect(playUrl(torrent.hash, file)).toBe(`/play/${torrent.hash}/1`)
+    expect(playUrl(torrent.hash, file.id)).toBe(`/play/${torrent.hash}/1`)
     expect(streamUrl('http://nas:8090', torrent.hash, file)).toBe(
       `http://nas:8090/stream/%D0%A4%D0%B8%D0%BB%D1%8C%D0%BC.mkv?link=${torrent.hash}&index=1&play`,
     )

@@ -21,7 +21,7 @@ export function App() {
   return (
     <Shell route={route}>
       {route.name === 'torrents' && <TorrentsPage />}
-      {route.name === 'torrent' && <TorrentPage key={route.hash} hash={route.hash} />}
+      {route.name === 'torrent' && <TorrentPage key={route.hash} hash={route.hash} file={route.file} />}
       {route.name === 'search' && <Placeholder title={t('nav.search')} />}
       {route.name === 'settings' && <Placeholder title={t('nav.settings')} />}
     </Shell>

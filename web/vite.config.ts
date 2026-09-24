@@ -10,6 +10,8 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     emptyOutDir: true,
+    // hls.js (~575 kB) is its own chunk, loaded only when a file plays over HLS.
+    chunkSizeWarningLimit: 600,
   },
   server: {
     // `npm run dev` talks to a Rustorr on localhost:8090.

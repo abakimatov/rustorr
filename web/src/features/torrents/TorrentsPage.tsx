@@ -11,6 +11,7 @@ import { Button, Chip, StatusDot } from '../../components/ui'
 import { useLanguage } from '../../i18n'
 import { formatBytes, formatPeers, formatSpeed } from '../../lib/format'
 import { href } from '../../lib/router'
+import { mediaKind } from '../player/media'
 import { AddDialog } from './AddDialog'
 import { useDrop, useRemove, useTorrents } from './queries'
 import { initials, isLive, statusKey, statusTone } from './status'
@@ -55,10 +56,12 @@ function Actions({ torrent }: { torrent: Torrent }) {
   const remove = useRemove()
   const drop = useDrop()
   const origin = window.location.origin
+  // Straight to the player when there is something to play.
+  const first = torrentFiles(torrent).find((file) => mediaKind(file.path) !== null)
   return (
     <div className="flex justify-end gap-1.5">
       <a
-        href={href({ name: 'torrent', hash: torrent.hash })}
+        href={href({ name: 'torrent', hash: torrent.hash, file: first?.id })}
         aria-label={t('torrents.watch')}
         title={t('torrents.watch')}
         className="flex size-10 items-center justify-center rounded-lg bg-accent-soft text-accent"

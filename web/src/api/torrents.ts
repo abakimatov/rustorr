@@ -66,8 +66,9 @@ export async function listViewed(hash?: string): Promise<Viewed[]> {
   return (await postJson<Viewed[] | null>('/viewed', { action: 'list', hash: hash ?? '' })) ?? []
 }
 
-export function setViewed(hash: string, fileIndex: number): Promise<void> {
-  return postJson('/viewed', { action: 'set', hash, file_index: fileIndex })
+/** Marks the file viewed and remembers where playback stands. */
+export function setViewed(hash: string, fileIndex: number, timecode = 0): Promise<void> {
+  return postJson('/viewed', { action: 'set', hash, file_index: fileIndex, timecode })
 }
 
 export function clearViewed(hash: string, fileIndex = -1): Promise<void> {

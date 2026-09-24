@@ -45,4 +45,6 @@ export interface Torrent {
 export interface Viewed {
   hash: string
   file_index: number
+  /** Playback position in seconds. */
+  timecode?: number
 }

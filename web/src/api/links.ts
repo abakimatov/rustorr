@@ -6,8 +6,8 @@ export function fileName(path: string): string {
 }
 
 /** Raw bytes of one file, for the browser's `<video>`. */
-export function playUrl(hash: string, file: FileStat): string {
-  return `/play/${hash}/${file.id}`
+export function playUrl(hash: string, fileId: number): string {
+  return `/play/${hash}/${fileId}`
 }
 
 /** An absolute link for external players (`/stream/<name>?…&play`). */
