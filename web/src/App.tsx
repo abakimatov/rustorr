@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 
 import { Shell } from './app/Shell'
+import { SettingsPage } from './features/settings/SettingsPage'
 import { TorrentPage } from './features/torrents/TorrentPage'
 import { TorrentsPage } from './features/torrents/TorrentsPage'
 import { useRoute } from './lib/router'
@@ -23,7 +24,7 @@ export function App() {
       {route.name === 'torrents' && <TorrentsPage />}
       {route.name === 'torrent' && <TorrentPage key={route.hash} hash={route.hash} file={route.file} />}
       {route.name === 'search' && <Placeholder title={t('nav.search')} />}
-      {route.name === 'settings' && <Placeholder title={t('nav.settings')} />}
+      {route.name === 'settings' && <SettingsPage section={route.section} />}
     </Shell>
   )
 }
