@@ -47,7 +47,7 @@ use crate::{
     m3u,
     msx_api::{self, Msx},
     range::{self, ByteRange, RangeError},
-    search_api, settings_api, web_api,
+    search_api, settings_api, web_api, web_ui,
     webdav::{self, WebDav},
 };
 
@@ -148,7 +148,6 @@ pub fn router_with_services(
         .route("/playlist/", get(playlist_root))
         .route("/playlist/{*fname}", get(playlist_named))
         .route("/playlistall/all.m3u", get(playlist_all))
-        .route("/", get(web_api::root))
         .route("/magnets", get(web_api::magnets))
         .route("/stat", get(web_api::stat))
         .route(
@@ -194,6 +193,7 @@ pub fn router_with_services(
         .route("/dav/{*path}", any(webdav::handle))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found);
+    let routes = web_ui::routes(routes);
     let routes = if state.gstreamer.is_some() {
         gstreamer_api::routes(routes)
     } else {

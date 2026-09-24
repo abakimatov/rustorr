@@ -1,0 +1,10 @@
+{
+  "app": {
+    "title": "Rustorr",
+    "server": "Сервер {{version}}",
+    "connecting": "Подключение к серверу…",
+    "unreachable": "Сервер недоступен"
+  },
+  "nav": { "torrents": "Торренты", "search": "Поиск", "settings": "Настройки" },
+  "language": { "ru": "Русский", "en": "English" }
+}

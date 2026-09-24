@@ -2,6 +2,17 @@
 # Build each target on the builder's native architecture. On an arm64 builder
 # the amd64 image is cross-compiled, rather than compiled under QEMU.
 ARG RUST_VERSION=1.90
+ARG NODE_VERSION=24
+
+# The web interface (R8): built once, on the builder's platform, and embedded
+# into the binary by rustorr-http's build script.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY web ./
+RUN npm run build
+
 FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-bookworm AS build
 
 ARG TARGETARCH
@@ -38,6 +49,7 @@ RUN if [ -n "${RUSTORR_BUILD_PACKAGES}" ]; then \
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
+COPY --from=web /web/dist ./web/dist
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/target,sharing=locked \

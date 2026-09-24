@@ -23,6 +23,7 @@ mod search_api;
 mod serve_content;
 mod settings_api;
 mod web_api;
+mod web_ui;
 mod webdav;
 
 pub use access::{Credentials, HttpConfig};

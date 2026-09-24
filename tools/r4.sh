@@ -9,7 +9,7 @@ TARGET_VOLUME=${RUSTORR_R4_TARGET_VOLUME:-rustorr-r4-target}
 CARGO_VOLUME=${RUSTORR_R4_CARGO_VOLUME:-rustorr-r4-cargo}
 
 usage() {
-  printf '%s\n' "usage: $0 {doctor|image|check|boundaries|test|build|cross-build|smoke|cargo|clean}"
+  printf '%s\n' "usage: $0 {doctor|image|check|web-check|web|boundaries|test|build|cross-build|smoke|cargo|clean}"
   printf '%s\n' "       cargo runs any cargo command in the toolchain container, e.g. cargo generate-lockfile"
 }
 
@@ -57,7 +57,25 @@ boundaries() {
   done
 }
 
+# The web interface (R8) in Node's image. node_modules lives in a volume of
+# its own, so the container's Linux packages never replace the host's.
+WEB_IMAGE=${RUSTORR_WEB_IMAGE:-node:24-bookworm-slim}
+in_web() {
+  doctor
+  docker run --rm \
+    -v "${ROOT}/web:/web" \
+    -v rustorr-r8-node-modules:/web/node_modules \
+    -v rustorr-r8-npm-cache:/root/.npm \
+    -w /web \
+    "${WEB_IMAGE}" "$@"
+}
+
+# Type check, lint, tests and the production build, which leaves web/dist for
+# rustorr-http to embed.
+web_check() { in_web sh -c 'npm ci --no-audit --no-fund && npm run check'; }
+
 check() {
+  web_check
   boundaries
   in_dev sh -c '
     set -eu
@@ -143,6 +161,8 @@ case "${command}" in
   doctor) doctor ;;
   image) image ;;
   check) check ;;
+  web-check) web_check ;;
+  web) in_web "$@" ;;
   boundaries) boundaries ;;
   test) test_all ;;
   build) build ;;
