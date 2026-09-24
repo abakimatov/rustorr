@@ -1,0 +1,7 @@
+# The R8 browser scenarios' runner. Playwright's Chromium is an open-source
+# build without H.264 and AAC, the codecs of the server's HLS; Firefox decodes
+# them through the system's libavcodec, which the Playwright image lacks.
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libavcodec60 \
+    && rm -rf /var/lib/apt/lists/*

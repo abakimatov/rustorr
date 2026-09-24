@@ -40,13 +40,25 @@ export function directMime(path: string): string | undefined {
   return DIRECT[extension(path)]
 }
 
+/** What the server's HLS carries: fMP4 with H.264 and AAC. Open-source
+ * Chromium builds decode neither. */
+export const HLS_CODECS = 'video/mp4; codecs="avc1.4d401f,mp4a.40.2"'
+
 /** Direct when the browser says it can decode the container; otherwise HLS
- * for video when the server has it; otherwise direct anyway (Chromium plays
- * many Matroska files it does not admit to). */
-export function defaultMode(path: string, gst: boolean, canPlay: (mime: string) => boolean): Mode {
+ * for video when the server has it and the browser decodes its codecs;
+ * otherwise direct anyway (Chromium plays many Matroska files it does not
+ * admit to). */
+export function defaultMode(path: string, hls: boolean, canPlay: (mime: string) => boolean): Mode {
   const mime = directMime(path)
   if (mime && canPlay(mime)) return 'direct'
-  return gst && mediaKind(path) === 'video' ? 'hls' : 'direct'
+  return hls && mediaKind(path) === 'video' ? 'hls' : 'direct'
+}
+
+/** Whether this browser can play the server's HLS, through MSE or natively. */
+export function canPlayHls(): boolean {
+  const mediaSource = (window as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource ?? window.MediaSource
+  if (mediaSource?.isTypeSupported(HLS_CODECS)) return true
+  return document.createElement('video').canPlayType('application/vnd.apple.mpegurl') !== ''
 }
 
 /** `h:mm:ss` or `m:ss`. */

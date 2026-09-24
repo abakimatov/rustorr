@@ -14,7 +14,7 @@ import { CheckIcon, LinkIcon } from '../../components/icons'
 import { Button } from '../../components/ui'
 import { useCopy } from '../../lib/useCopy'
 import { torrentKeys } from '../torrents/queries'
-import { defaultMode, formatTime, mediaKind, type Mode } from './media'
+import { canPlayHls, defaultMode, formatTime, mediaKind, type Mode } from './media'
 
 /** How often the position is saved while playing, and the task kept warm. */
 const SAVE_EVERY_MS = 15_000
@@ -81,7 +81,7 @@ export function Player({
   const gst = useQuery({ queryKey: ['gst', 'builtIn'], queryFn: gstBuiltIn, staleTime: Infinity, retry: false })
   const [chosenMode, setChosenMode] = useState<Mode | null>(null)
   const mode: Mode | null =
-    chosenMode ?? (gst.isPending ? null : defaultMode(file.path, gst.data === true, canPlay))
+    chosenMode ?? (gst.isPending ? null : defaultMode(file.path, gst.data === true && canPlayHls(), canPlay))
   const hlsAvailable = gst.data === true && kind === 'video'
 
   const probed = useQuery({
@@ -180,6 +180,11 @@ export function Player({
         })
         player.on(HlsClass.Events.ERROR, (_event, data) => {
           if (!data.fatal) return
+          // No level the browser can decode: recovering would only stall.
+          if (data.details === HlsClass.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR) {
+            fail(message('player.noCodecs'))
+            return
+          }
           if (data.type === HlsClass.ErrorTypes.MEDIA_ERROR && !recovered) {
             recovered = true
             player?.recoverMediaError()

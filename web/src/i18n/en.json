@@ -136,7 +136,8 @@
     "noHls": "The browser does not support HLS.",
     "tryHls": "Try HLS",
     "tryDirect": "Play directly",
-    "hlsNote": "HLS: the server repackages the file with GStreamer, with audio and subtitle choice. Starting and seeking may take a few seconds."
+    "hlsNote": "HLS: the server repackages the file with GStreamer, with audio and subtitle choice. Starting and seeking may take a few seconds.",
+    "noCodecs": "This browser does not decode H.264 and AAC, which the server repackages the stream into. Try playing the file directly or open it in an external player."
   },
   "settings": {
     "title": "Settings",
@@ -352,7 +353,8 @@
       "stop": "Stop the server",
       "stopConfirm": "Stop the server? Playback stops, and it can only be started again on the machine it runs on.",
       "stopped": "The server is stopping. This page will stop answering."
-    }
+    },
+    "mib": "MiB"
   },
   "search": {
     "title": "Search",

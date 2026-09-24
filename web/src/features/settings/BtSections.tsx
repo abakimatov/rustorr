@@ -25,7 +25,7 @@ export function CacheSection({ draft, update }: SectionProps) {
         hint={t('settings.cache.sizeHint', { size: formatBytes(draft.CacheSize, language) })}
         value={Math.round(draft.CacheSize / MIB)}
         min={1}
-        suffix={language === 'ru' ? 'МиБ' : 'MiB'}
+        suffix={t('settings.mib')}
         onChange={(value) => update({ CacheSize: Math.max(1, value) * MIB })}
       />
       <RangeInput

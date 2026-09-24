@@ -9,7 +9,7 @@ TARGET_VOLUME=${RUSTORR_R4_TARGET_VOLUME:-rustorr-r4-target}
 CARGO_VOLUME=${RUSTORR_R4_CARGO_VOLUME:-rustorr-r4-cargo}
 
 usage() {
-  printf '%s\n' "usage: $0 {doctor|image|check|web-check|web|boundaries|test|build|cross-build|smoke|cargo|clean}"
+  printf '%s\n' "usage: $0 {doctor|image|check|web-check|web|e2e|boundaries|test|build|cross-build|smoke|cargo|clean}"
   printf '%s\n' "       cargo runs any cargo command in the toolchain container, e.g. cargo generate-lockfile"
 }
 
@@ -73,6 +73,27 @@ in_web() {
 # Type check, lint, tests and the production build, which leaves web/dist for
 # rustorr-http to embed.
 web_check() { in_web sh -c 'npm ci --no-audit --no-fund && npm run check'; }
+
+# The R8 browser scenarios (web/e2e) against Rustorr with GStreamer on the
+# fixture stand: the tracker and the seeder are restarted first, as the
+# contract harness does, so stale peers of earlier runs do not stall
+# downloads; Rustorr's data is fresh on every run.
+E2E_COMPOSE="docker compose -f ${ROOT}/docker-compose.baseline.yml -f ${ROOT}/docker-compose.r2-hermetic.yml -f ${ROOT}/docker-compose.r8-e2e.yml"
+e2e() {
+  doctor
+  in_web sh -c 'npm ci --no-audit --no-fund >/dev/null'
+  ${E2E_COMPOSE} up -d tracker seeder
+  ${E2E_COMPOSE} restart -t 0 tracker
+  ${E2E_COMPOSE} restart -t 10 seeder
+  ${E2E_COMPOSE} build e2e-rustorr e2e
+  ${E2E_COMPOSE} up -d --force-recreate --renew-anon-volumes e2e-rustorr
+  status=0
+  ${E2E_COMPOSE} run --rm e2e npx playwright test -c e2e/playwright.config.ts "$@" || status=$?
+  mkdir -p "${ROOT}/web/e2e/results"
+  ${E2E_COMPOSE} logs --no-color e2e-rustorr >"${ROOT}/web/e2e/results/rustorr.log" 2>&1 || true
+  ${E2E_COMPOSE} rm -sf -v e2e-rustorr e2e-seed >/dev/null
+  return "${status}"
+}
 
 check() {
   web_check
@@ -163,6 +184,7 @@ case "${command}" in
   check) check ;;
   web-check) web_check ;;
   web) in_web "$@" ;;
+  e2e) e2e "$@" ;;
   boundaries) boundaries ;;
   test) test_all ;;
   build) build ;;
