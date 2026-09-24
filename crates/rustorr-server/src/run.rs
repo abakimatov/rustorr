@@ -1,24 +1,23 @@
 //! The composition root: the one place that builds the concrete engine, cache,
 //! state and HTTP server, starts them in order and stops them in reverse.
 
-use std::{future::Future, io, pin::Pin, sync::Arc, time::Duration};
+use std::{future::Future, io, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{Context, bail};
 use rustorr_cache::{Cache, CacheConfig, DiskStore, MemoryStore, PieceStore};
 use rustorr_engine::{Engine, EngineConfig, LibrqbitEngine};
-use rustorr_http::{Credentials, HttpConfig, Integrations, Msx, ServerInfo};
+use rustorr_http::{AccessLog, Credentials, HttpConfig, Integrations, Listeners, Msx, ServerInfo};
 use rustorr_lifecycle::{ClientCore, TorrentCoordinator};
 use rustorr_search::{RUTOR_URL, RutorDatabase, Search, SearchService};
 use rustorr_state::State;
 use tokio::{
-    net::TcpListener,
     signal::unix::{Signal, SignalKind, signal},
     sync::{Notify, oneshot},
 };
 use tracing::{info, warn};
 
 use crate::{
-    config::{CacheMode, Config},
+    config::{CacheMode, Config, engine_proxy, public_ip},
     discovery::DiscoveryService,
 };
 
@@ -46,13 +45,22 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         ..HttpConfig::default()
     };
 
-    let listener = TcpListener::bind(config.listen)
+    let listener = Listeners::bind(&config.listen)
         .await
-        .with_context(|| format!("cannot listen on {}", config.listen))?;
-    let address = listener
-        .local_addr()
-        .context("cannot read the bound address")?;
+        .context("cannot listen on")?;
+    let addresses = listener
+        .local_addrs()
+        .context("cannot read the bound addresses")?;
+    // Generated URLs, ffprobe and GStreamer reach the server on its first
+    // address's port, as MatriX.145 uses its one `--port`.
+    let address = addresses[0];
     http.port = address.port();
+    if let Some(path) = &config.access_log_file {
+        http.access_log =
+            Some(Arc::new(AccessLog::open(path).with_context(|| {
+                format!("cannot open the web log {}", path.display())
+            })?));
+    }
 
     tokio::fs::create_dir_all(&config.data_dir)
         .await
@@ -66,6 +74,15 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let schema_version = state
         .schema_version()
         .context("cannot read the schema version")?;
+    let proxy_url = engine_proxy(config.proxy_url.as_deref(), config.proxy_mode.as_deref())
+        .map_err(anyhow::Error::msg)?;
+    if proxy_url.is_some() {
+        info!(
+            mode = config.proxy_mode.as_deref().unwrap_or_default(),
+            "BitTorrent traffic goes through the SOCKS5 proxy: peer connections and HTTP trackers"
+        );
+    }
+    log_public_ips(&config);
     let cache = Arc::new(Cache::new(
         cache_store(&config),
         CacheConfig {
@@ -76,9 +93,15 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         LibrqbitEngine::start(
             EngineConfig {
                 data_dir: config.data_dir.join("engine"),
-                listen_port: Some(config.peer_port),
+                listen_port: Some(
+                    config
+                        .torrent_addr
+                        .map_or(config.peer_port, |address| address.port),
+                ),
+                listen_ip: config.torrent_addr.and_then(|address| address.ip),
                 enable_dht: !config.disable_dht,
                 enable_trackers: !config.disable_trackers,
+                proxy_url,
             },
             Arc::clone(&cache),
         )
@@ -100,6 +123,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     start_test_control(Arc::clone(&torrents)).await?;
     info!(
         %address,
+        addresses = ?addresses,
         data_dir = %config.data_dir.display(),
         schema_version,
         cache = ?config.cache,
@@ -121,7 +145,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let core: Arc<dyn ClientCore> = torrents;
     let discovery = Arc::new(DiscoveryService::new(
         Arc::clone(&core),
-        address.ip(),
+        addresses.iter().map(SocketAddr::ip).collect(),
         address.port(),
         VERSION.into(),
         outbound.clone(),
@@ -138,6 +162,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let outcome = serve_until_signalled(
         listener,
         &mut signals,
+        config.dont_kill,
         config.shutdown_grace,
         core,
         integrations,
@@ -207,6 +232,24 @@ async fn start_test_control(torrents: Arc<TorrentCoordinator>) -> anyhow::Result
         }
     });
     Ok(())
+}
+
+/// `--public-ipv4`/`--public-ipv6`: MatriX.145 hands a public address to
+/// its engine (and looks one up on the internet otherwise); librqbit 9.0.1
+/// has no such option, so the address is only checked and logged.
+fn log_public_ips(config: &Config) {
+    for (value, ipv6, flag) in [
+        (&config.public_ipv4, false, "--public-ipv4"),
+        (&config.public_ipv6, true, "--public-ipv6"),
+    ] {
+        let Some(value) = value.as_deref().filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        match public_ip(value, ipv6) {
+            Ok(ip) => info!(%ip, flag, "public address noted; the engine cannot announce it"),
+            Err(reason) => warn!(value, flag, reason, "public address ignored"),
+        }
+    }
 }
 
 /// The GStreamer module, in builds with the `gstreamer` feature; its
@@ -308,8 +351,9 @@ fn outbound_client() -> anyhow::Result<reqwest::Client> {
 }
 
 async fn serve_until_signalled(
-    listener: TcpListener,
+    listener: Listeners,
     signals: &mut Signals,
+    dont_kill: bool,
     grace: Duration,
     core: Arc<dyn ClientCore>,
     integrations: Integrations,
@@ -338,7 +382,7 @@ async fn serve_until_signalled(
             info!("shutdown requested over HTTP");
             stop_gracefully(server.as_mut(), stop, grace).await
         }
-        signal = signals.next() => {
+        signal = signals.stopping(dont_kill) => {
             info!(signal, "shutdown signal received");
             stop_gracefully(server.as_mut(), stop, grace).await
         }
@@ -390,23 +434,45 @@ where
     }
 }
 
+/// The signals MatriX.145 stops on: SIGHUP, SIGINT, SIGTERM and SIGQUIT.
 struct Signals {
-    terminate: Signal,
+    hangup: Signal,
     interrupt: Signal,
+    terminate: Signal,
+    quit: Signal,
 }
 
 impl Signals {
     fn install() -> io::Result<Self> {
         Ok(Self {
-            terminate: signal(SignalKind::terminate())?,
+            hangup: signal(SignalKind::hangup())?,
             interrupt: signal(SignalKind::interrupt())?,
+            terminate: signal(SignalKind::terminate())?,
+            quit: signal(SignalKind::quit())?,
         })
     }
 
     async fn next(&mut self) -> &'static str {
         tokio::select! {
-            _ = self.terminate.recv() => "SIGTERM",
+            _ = self.hangup.recv() => "SIGHUP",
             _ = self.interrupt.recv() => "SIGINT",
+            _ = self.terminate.recv() => "SIGTERM",
+            _ = self.quit.recv() => "SIGQUIT",
+        }
+    }
+
+    /// The next signal that should stop the server; with `--dont-kill`
+    /// none does, and each is only logged.
+    async fn stopping(&mut self, dont_kill: bool) -> &'static str {
+        loop {
+            let signal = self.next().await;
+            if !dont_kill {
+                return signal;
+            }
+            warn!(
+                signal,
+                "signal ignored (--dont-kill); stop the server with GET /shutdown"
+            );
         }
     }
 }

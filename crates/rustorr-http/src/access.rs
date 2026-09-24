@@ -65,7 +65,7 @@ impl Credentials {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpConfig {
     pub credentials: Option<Credentials>,
     pub trusted_proxies: Vec<IpNet>,
@@ -83,6 +83,8 @@ pub struct HttpConfig {
     pub port: u16,
     /// The `ffprobe` binary `/ffp` runs.
     pub ffprobe: std::path::PathBuf,
+    /// The web log (`--weblogpath`): one line per request.
+    pub access_log: Option<std::sync::Arc<crate::AccessLog>>,
 }
 
 impl Default for HttpConfig {
@@ -96,6 +98,7 @@ impl Default for HttpConfig {
             webdav: false,
             port: 8090,
             ffprobe: std::path::PathBuf::from("ffprobe"),
+            access_log: None,
             trusted_proxies: vec![
                 "127.0.0.0/8".parse().expect("loopback CIDR"),
                 "::1/128".parse().expect("loopback CIDR"),

@@ -2,12 +2,17 @@
 //! does: from the settings at start-up, on every `/settings` change, and —
 //! for DLNA — after each catalog change.
 
-use std::{net::IpAddr, sync::Arc, time::Duration, time::SystemTime};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+    time::SystemTime,
+};
 
 use rustorr_discovery::{Bonjour, BonjourConfig, Ssdp, SsdpConfig, identity, interfaces};
-use rustorr_http::{Discovery, DiscoveryChange, DiscoveryFuture, DlnaDevice};
+use rustorr_http::{Discovery, DiscoveryChange, DiscoveryFuture, DlnaDevice, Listeners};
 use rustorr_lifecycle::{ClientCore, Settings, SettingsCommand};
-use tokio::{net::TcpListener, sync::Mutex, sync::oneshot, task::JoinHandle};
+use tokio::{sync::Mutex, sync::oneshot, task::JoinHandle};
 use tracing::{info, warn};
 
 /// dms's SSDP notify interval.
@@ -17,7 +22,7 @@ const DLNA_FIRST_PORT: u16 = 9080;
 
 pub struct DiscoveryService {
     core: Arc<dyn ClientCore>,
-    bind: IpAddr,
+    bind: Vec<IpAddr>,
     web_port: u16,
     version: String,
     client: reqwest::Client,
@@ -38,7 +43,7 @@ const DLNA_GRACE: Duration = Duration::from_secs(1);
 impl DiscoveryService {
     pub fn new(
         core: Arc<dyn ClientCore>,
-        bind: IpAddr,
+        bind: Vec<IpAddr>,
         web_port: u16,
         version: String,
         client: reqwest::Client,
@@ -93,9 +98,15 @@ impl DiscoveryService {
             &interfaces::list(),
         );
         let udn = identity::device_uuid(&friendly_name);
+        // The first port free on every bind address, as `netbind.CheckPort`.
         let mut port = DLNA_FIRST_PORT;
         let listener = loop {
-            match TcpListener::bind((self.bind, port)).await {
+            let addresses: Vec<SocketAddr> = self
+                .bind
+                .iter()
+                .map(|ip| SocketAddr::new(*ip, port))
+                .collect();
+            match Listeners::bind(&addresses).await {
                 Ok(listener) => break listener,
                 Err(_) if port < u16::MAX => port += 1,
                 Err(error) => {

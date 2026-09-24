@@ -12,7 +12,6 @@ mod soap;
 use std::{
     future::Future,
     io,
-    net::SocketAddr,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -73,16 +72,11 @@ pub fn dlna_router(device: DlnaDevice) -> Router {
 }
 
 pub async fn serve_dlna(
-    listener: tokio::net::TcpListener,
+    listener: crate::Listeners,
     device: DlnaDevice,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    axum::serve(
-        listener,
-        dlna_router(device).into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown)
-    .await
+    listener.serve(dlna_router(device), shutdown).await
 }
 
 /// Go's `ServeMux` with dms's handlers: every method reaches the handler of

@@ -38,10 +38,12 @@ use tracing::{Level, error, info_span};
 use crate::{
     ApiError,
     access::{HttpConfig, WafSnapshot},
+    access_log,
     discovery::{Discovery, DiscoveryChange, NoDiscovery},
     error::go_json,
     ffprobe_api,
     gstreamer_api::{self, GstreamerSetup},
+    listeners::Listeners,
     m3u,
     msx_api::{self, Msx},
     range::{self, ByteRange, RangeError},
@@ -204,8 +206,10 @@ pub fn router_with_services(
     Router::new()
         .fallback_service(routes)
         .layer(from_fn(cors))
-        .layer(from_fn_with_state(state, waf))
+        .layer(from_fn_with_state(state.clone(), waf))
         .layer(map_response(without_allow_on_404))
+        // gin's first middleware: every request is logged, blocked or not.
+        .layer(from_fn_with_state(state, access_log::middleware))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<Body>| {
@@ -243,20 +247,19 @@ pub async fn serve_with_lifecycle(
 }
 
 pub async fn serve_with_services(
-    listener: tokio::net::TcpListener,
+    listener: Listeners,
     info: ServerInfo,
     core: Arc<dyn ClientCore>,
     integrations: Integrations,
     http: HttpConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    axum::serve(
-        listener,
-        router_with_services(info, core, integrations, http)
-            .into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown)
-    .await
+    listener
+        .serve(
+            router_with_services(info, core, integrations, http),
+            shutdown,
+        )
+        .await
 }
 
 pub async fn serve_with_core(

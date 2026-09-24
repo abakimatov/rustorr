@@ -1,14 +1,14 @@
 use std::{
     collections::HashMap,
     io::SeekFrom,
-    net::Ipv6Addr,
+    net::{IpAddr, Ipv6Addr},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
 use librqbit::{
-    AddTorrent, AddTorrentOptions as LibrqbitAddOptions, AddTorrentResponse, DhtSessionConfig,
-    ListenerMode, ListenerOptions, ManagedTorrent, Session, SessionOptions,
+    AddTorrent, AddTorrentOptions as LibrqbitAddOptions, AddTorrentResponse, ConnectionOptions,
+    DhtSessionConfig, ListenerMode, ListenerOptions, ManagedTorrent, Session, SessionOptions,
     dht::DhtPersistenceConfig, storage::StorageFactoryExt,
 };
 use librqbit_core::{magnet::Magnet, torrent_metainfo::torrent_from_bytes};
@@ -364,8 +364,18 @@ fn session_options(config: &EngineConfig, cache: Arc<Cache>) -> SessionOptions {
         default_storage_factory: Some(CacheStorageFactory::new(cache).boxed()),
         listen: config.listen_port.map(|port| ListenerOptions {
             mode: ListenerMode::TcpAndUtp,
-            listen_addr: (Ipv6Addr::UNSPECIFIED, port).into(),
+            listen_addr: (
+                config
+                    .listen_ip
+                    .unwrap_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED)),
+                port,
+            )
+                .into(),
             ..ListenerOptions::default()
+        }),
+        connect: config.proxy_url.clone().map(|proxy_url| ConnectionOptions {
+            proxy_url: Some(proxy_url),
+            ..ConnectionOptions::default()
         }),
         ..SessionOptions::default()
     }
@@ -431,8 +441,10 @@ mod tests {
         EngineConfig {
             data_dir: data_dir.into(),
             listen_port: None,
+            listen_ip: None,
             enable_dht: false,
             enable_trackers: false,
+            proxy_url: None,
         }
     }
 
@@ -510,6 +522,35 @@ mod tests {
         .unwrap();
         assert!(matches!(listen.mode, ListenerMode::TcpAndUtp));
         assert_eq!(listen.listen_addr.port(), 51413);
+        assert_eq!(listen.listen_addr.ip(), IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+
+        let bound = session_options(
+            &EngineConfig {
+                listen_port: Some(1337),
+                listen_ip: Some("127.0.0.1".parse().unwrap()),
+                ..config("/data")
+            },
+            cache(),
+        )
+        .listen
+        .unwrap();
+        assert_eq!(bound.listen_addr, "127.0.0.1:1337".parse().unwrap());
+    }
+
+    #[test]
+    fn a_proxy_applies_to_outgoing_connections() {
+        assert!(session_options(&config("/data"), cache()).connect.is_none());
+        let options = session_options(
+            &EngineConfig {
+                proxy_url: Some("socks5://user:secret@10.0.0.1:1080".into()),
+                ..config("/data")
+            },
+            cache(),
+        );
+        assert_eq!(
+            options.connect.unwrap().proxy_url.as_deref(),
+            Some("socks5://user:secret@10.0.0.1:1080")
+        );
     }
 
     #[test]

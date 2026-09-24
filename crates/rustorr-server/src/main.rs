@@ -13,7 +13,10 @@ use tracing::{error, info};
 
 fn main() -> ExitCode {
     let config = config::Config::parse();
-    logging::init(config.log_format);
+    if let Err(error) = logging::init(config.log_format, config.log_file.as_deref()) {
+        eprintln!("cannot open the log file: {error}");
+        return ExitCode::FAILURE;
+    }
 
     // An explicit runtime rather than `#[tokio::main]`, for two reasons: it must
     // be multi-thread, because on a current-thread runtime the BitTorrent engine

@@ -258,6 +258,128 @@ fn shuts_down_cleanly_on_sigint_too() {
 }
 
 #[test]
+fn shuts_down_cleanly_on_sighup_as_the_reference_does() {
+    shuts_down_cleanly_on("HUP", "SIGHUP");
+}
+
+#[test]
+fn dont_kill_ignores_signals_until_asked_over_http() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = Server::start(dir.path(), &["--dont-kill"]);
+    for signal in ["TERM", "INT", "HUP"] {
+        server.signal(signal);
+    }
+    // Still serving after the signals have been handled.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server
+        .messages()
+        .iter()
+        .filter(|message| message.starts_with("signal ignored"))
+        .count()
+        < 3
+    {
+        server
+            .read_event(deadline)
+            .unwrap_or_else(|| panic!("signals not logged: {:#?}", server.messages()));
+    }
+    assert_eq!(http_get(server.address(), "/echo").0, "HTTP/1.1 200 OK");
+    assert_eq!(http_get(server.address(), "/shutdown").0, "HTTP/1.1 200 OK");
+    let exit = server.wait_for_exit();
+    assert!(exit.status.success(), "{:?}", server.messages());
+    assert_eq!(signal_name(&server), "<none>");
+}
+
+#[test]
+fn listens_on_every_address_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = Server::start(
+        dir.path(),
+        &["--listen", "127.0.0.1:0", "--listen", "127.0.0.2:0"],
+    );
+    let listening = server
+        .events
+        .iter()
+        .find(|event| event["fields"]["message"] == "listening")
+        .unwrap()
+        .clone();
+    let addresses: Vec<SocketAddr> = listening["fields"]["addresses"]
+        .as_str()
+        .unwrap()
+        .trim_matches(['[', ']'])
+        .split(", ")
+        .map(|address| address.parse().unwrap())
+        .collect();
+    assert_eq!(addresses.len(), 2, "{listening}");
+    assert_eq!(addresses[0], server.address());
+    for address in addresses {
+        let (status, body) = http_get(address, "/echo");
+        assert_eq!(
+            (status.as_str(), body.as_str()),
+            ("HTTP/1.1 200 OK", "MatriX.145")
+        );
+    }
+    server.signal("TERM");
+    assert!(server.wait_for_exit().status.success());
+}
+
+#[test]
+fn logs_go_to_files_and_requests_to_the_web_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("server.log");
+    let web = dir.path().join("web.log");
+    let mut server = Server::spawn(
+        &[
+            "--data-dir",
+            dir.path().join("data").to_str().unwrap(),
+            "--log-format",
+            "json",
+            "--log-file",
+            log.to_str().unwrap(),
+            "--access-log-file",
+            web.to_str().unwrap(),
+        ],
+        &[],
+    );
+    let deadline = Instant::now() + STARTUP;
+    let address = loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if let Some(address) = text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find_map(|event| listening_address(&event))
+        {
+            break address;
+        }
+        assert!(Instant::now() < deadline, "never listened; log: {text}");
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(http_get(address, "/echo?probe=1").0, "HTTP/1.1 200 OK");
+    assert_eq!(http_get(address, "/shutdown").0, "HTTP/1.1 200 OK");
+    let exit = server.wait_for_exit();
+    assert!(exit.status.success());
+    // Nothing on stderr: the server log is the file.
+    assert!(server.events.is_empty(), "{:#?}", server.events);
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.contains("shutdown complete"), "{text}");
+    let web = std::fs::read_to_string(&web).unwrap();
+    let lines: Vec<&str> = web.lines().collect();
+    assert_eq!(lines.len(), 2, "{web}");
+    // ` 2026/09/24 01:02:03 200 |    127.0.0.1 | GET     "/echo?probe=1" `
+    let (stamp, entry) = lines[0][1..].split_at(19);
+    assert_eq!(stamp.len(), 19);
+    assert!(
+        stamp.chars().nth(4) == Some('/') && stamp.chars().nth(13) == Some(':'),
+        "{stamp}"
+    );
+    assert_eq!(entry, r#" 200 |    127.0.0.1 | GET     "/echo?probe=1" "#);
+    assert!(
+        lines[1].ends_with(r#" 200 |    127.0.0.1 | GET     "/shutdown" "#),
+        "{}",
+        lines[1]
+    );
+}
+
+#[test]
 fn text_logs_also_work_and_report_the_address() {
     let dir = tempfile::tempdir().unwrap();
     let mut server = Server::spawn(&["--data-dir", dir.path().to_str().unwrap()], &[]);
@@ -449,6 +571,39 @@ fn refuses_to_start_when_the_port_is_taken_before_touching_the_data_directory() 
         !data.exists(),
         "a failed start must not leave a data directory behind"
     );
+}
+
+#[test]
+fn refuses_a_proxy_the_engine_cannot_apply() {
+    for (args, expected) in [
+        (
+            &["--proxy-url", "socks5://127.0.0.1:1080"][..],
+            "--proxy-mode tracker",
+        ),
+        (
+            &[
+                "--proxy-url",
+                "http://127.0.0.1:3128",
+                "--proxy-mode",
+                "full",
+            ][..],
+            "supports only socks5",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = vec![
+            "--data-dir",
+            dir.path().to_str().unwrap(),
+            "--log-format",
+            "json",
+        ];
+        command.extend_from_slice(args);
+        let mut server = Server::spawn(&command, &[]);
+        let exit = server.wait_for_exit();
+        assert_eq!(exit.status.code(), Some(1));
+        let failure = server.messages().pop().unwrap();
+        assert!(failure.contains(expected), "{failure}");
+    }
 }
 
 #[test]
