@@ -3,7 +3,7 @@
   "short_name": "Rustorr",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#15130F",
-  "theme_color": "#15130F",
+  "background_color": "#0F1115",
+  "theme_color": "#0F1115",
   "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }
