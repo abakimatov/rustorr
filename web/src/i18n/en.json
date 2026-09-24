@@ -353,5 +353,47 @@
       "stopConfirm": "Stop the server? Playback stops, and it can only be started again on the machine it runs on.",
       "stopped": "The server is stopping. This page will stop answering."
     }
+  },
+  "search": {
+    "title": "Search",
+    "query": "Query",
+    "placeholder": "A film, series or album title",
+    "submit": "Search",
+    "source": "Source",
+    "indexer": "Indexer",
+    "allIndexers": "All indexers",
+    "sort": "Sort",
+    "bySeeds": "by seeds",
+    "bySize": "by size",
+    "byDate": "by date",
+    "hint": "Type a query: results can be added to the torrent list right away.",
+    "searching": "Searching…",
+    "nothing": "Nothing found",
+    "found_one": "{{count}} found",
+    "found_few": "{{count}} found",
+    "found_many": "{{count}} found",
+    "found_other": "{{count}} found",
+    "seeds": "Seeds / peers",
+    "add": "Add",
+    "added": "Added",
+    "inList": "Already listed",
+    "disabled": "{{source}} search is off in the settings.",
+    "openSettings": "Open search settings"
+  },
+  "cache": {
+    "title": "Cache",
+    "cached": "Cached",
+    "partial": "Partly",
+    "reading": "Being read",
+    "empty": "Missing",
+    "pieces_one": "{{count}} piece of {{size}}",
+    "pieces_few": "{{count}} pieces of {{size}}",
+    "pieces_many": "{{count}} pieces of {{size}}",
+    "pieces_other": "{{count}} pieces of {{size}}",
+    "perCell_one": "a cell is {{count}} piece",
+    "perCell_few": "a cell is {{count}} pieces",
+    "perCell_many": "a cell is {{count}} pieces",
+    "perCell_other": "a cell is {{count}} pieces",
+    "mapLabel": "Map of cached pieces"
   }
 }

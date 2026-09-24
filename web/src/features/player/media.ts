@@ -19,7 +19,8 @@ const DIRECT: Record<string, string> = {
 }
 
 const VIDEO = new Set(['mp4', 'm4v', 'mov', 'webm', 'ogv', 'mkv', 'avi', 'ts', 'm2ts', 'mts', 'mpg', 'mpeg', 'wmv', 'flv', '3gp', 'vob'])
-const AUDIO = new Set(['mp3', 'm4a', 'aac', 'flac', 'ogg', 'oga', 'opus', 'wav', 'ac3', 'dts', 'mka'])
+// AC3 and DTS are left out: browsers do not decode them.
+const AUDIO = new Set(['mp3', 'm4a', 'aac', 'flac', 'ogg', 'oga', 'opus', 'wav', 'mka'])
 
 export function extension(path: string): string {
   const name = path.split('/').pop() ?? path

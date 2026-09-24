@@ -36,7 +36,7 @@ export function useViewed(hash: string) {
   return useQuery({ queryKey: torrentKeys.viewed(hash), queryFn: () => listViewed(hash) })
 }
 
-function useInvalidating<T>(action: (value: T) => Promise<unknown>) {
+function useInvalidating<T, R>(action: (value: T) => Promise<R>) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: action,

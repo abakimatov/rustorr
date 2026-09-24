@@ -9,6 +9,7 @@ describe('media', () => {
     expect(mediaKind('a/b.mkv')).toBe('video')
     expect(mediaKind('clip.wav')).toBe('audio')
     expect(mediaKind('Фильм.srt')).toBeNull()
+    expect(mediaKind('Фильм.ac3')).toBeNull()
   })
 
   it('prefer the browser, then HLS for video', () => {
@@ -17,7 +18,6 @@ describe('media', () => {
     expect(defaultMode('movie.mkv', true, chrome)).toBe('hls')
     expect(defaultMode('movie.mkv', false, chrome)).toBe('direct')
     expect(defaultMode('clip.wav', true, chrome)).toBe('direct')
-    expect(defaultMode('track.ac3', true, chrome)).toBe('direct')
   })
 
   it('format playback time', () => {

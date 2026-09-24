@@ -12,6 +12,7 @@ import { href, navigate } from '../../lib/router'
 import { useCopy } from '../../lib/useCopy'
 import { mediaKind } from '../player/media'
 import { Player } from '../player/Player'
+import { CacheMap } from './CachePanel'
 import { useDrop, useRemove, useTorrent, useViewed } from './queries'
 import { isLive, statusKey, statusTone } from './status'
 
@@ -219,6 +220,7 @@ function Details({ torrent, fileId }: { torrent: Torrent; fileId?: number }) {
           <h2 className="font-display text-xl font-bold">{t('torrent.files')}</h2>
           <Files torrent={torrent} files={files} viewed={viewed.data ?? []} />
         </section>
+        {isLive(torrent) && <CacheMap hash={torrent.hash} />}
       </>
     )
   }
@@ -250,6 +252,7 @@ function Details({ torrent, fileId }: { torrent: Torrent; fileId?: number }) {
         <aside className="flex flex-col gap-3">
           <h2 className="font-display text-xl font-bold">{t('torrent.files')}</h2>
           <Files torrent={torrent} files={files} viewed={viewed.data ?? []} current={playing.id} />
+          {isLive(torrent) && <CacheMap hash={torrent.hash} />}
         </aside>
       </div>
     </>
