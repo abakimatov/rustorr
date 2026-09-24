@@ -1,5 +1,5 @@
 import i18next from 'i18next'
-import { initReactI18next } from 'react-i18next'
+import { initReactI18next, useTranslation } from 'react-i18next'
 
 import en from './en.json'
 import ru from './ru.json'
@@ -48,4 +48,10 @@ export function initI18n(language: Language = initialLanguage()) {
     fallbackLng: 'ru',
     interpolation: { escapeValue: false },
   })
+}
+
+/** The interface language, following changes. */
+export function useLanguage(): Language {
+  const { i18n } = useTranslation()
+  return languages.find((language) => language === i18n.language) ?? 'ru'
 }

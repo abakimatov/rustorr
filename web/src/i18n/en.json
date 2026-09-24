@@ -3,8 +3,116 @@
     "title": "Rustorr",
     "server": "Server {{version}}",
     "connecting": "Connecting to the server…",
-    "unreachable": "The server is unreachable"
+    "unreachable": "The server is unreachable",
+    "running": "Server is running",
+    "soon": "This section arrives in a later stage."
   },
-  "nav": { "torrents": "Torrents", "search": "Search", "settings": "Settings" },
-  "language": { "ru": "Русский", "en": "English" }
+  "nav": {
+    "torrents": "Torrents",
+    "search": "Search",
+    "settings": "Settings",
+    "sections": "Sections"
+  },
+  "language": {
+    "ru": "Русский",
+    "en": "English",
+    "switch": "Interface language"
+  },
+  "theme": {
+    "label": "Theme",
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
+  },
+  "common": {
+    "close": "Close",
+    "cancel": "Cancel",
+    "save": "Save",
+    "copy": "Copy",
+    "copied": "Copied",
+    "loading": "Loading…",
+    "error": "Something went wrong: {{message}}",
+    "retry": "Retry",
+    "more": "More"
+  },
+  "status": {
+    "added": "Added",
+    "gettingInfo": "Metadata",
+    "preload": "Preloading",
+    "working": "Working",
+    "closed": "Closed",
+    "inDb": "Saved"
+  },
+  "category": {
+    "all": "All",
+    "movie": "Movies",
+    "tv": "Series",
+    "music": "Music",
+    "other": "Other",
+    "none": "No category"
+  },
+  "torrents": {
+    "title": "Torrents",
+    "filter": "Filter by name",
+    "add": "Add",
+    "empty": "No torrents yet",
+    "emptyHint": "Add a magnet link, an info hash or a .torrent file.",
+    "nothingFound": "Nothing found",
+    "working": "Working",
+    "inDb": "Saved",
+    "columns": {
+      "name": "Name",
+      "state": "State",
+      "size": "Size",
+      "speed": "Download",
+      "peers": "Peers"
+    },
+    "files_one": "{{count}} file",
+    "files_few": "{{count}} files",
+    "files_many": "{{count}} files",
+    "files_other": "{{count}} files",
+    "watch": "Watch",
+    "playlist": "M3U playlist",
+    "allPlaylist": "Playlist of all torrents",
+    "drop": "Unload from memory",
+    "remove": "Remove",
+    "removeConfirm": "Remove “{{title}}” from the list? Its cached files will be deleted."
+  },
+  "add": {
+    "title": "Add a torrent",
+    "tabLink": "Link or hash",
+    "tabFiles": ".torrent files",
+    "link": "Magnet link, info hash or link to a .torrent",
+    "name": "Title",
+    "nameHint": "Optional: the torrent's own name otherwise",
+    "poster": "Poster link",
+    "category": "Category",
+    "save": "Save to the catalog",
+    "saveHint": "A saved torrent survives a server restart",
+    "submit": "Add",
+    "drop": "Drop .torrent files here",
+    "choose": "Choose files",
+    "chosen_one": "{{count}} file chosen",
+    "chosen_few": "{{count}} files chosen",
+    "chosen_many": "{{count}} files chosen",
+    "chosen_other": "{{count}} files chosen",
+    "adding": "Adding…"
+  },
+  "torrent": {
+    "back": "Torrents",
+    "files": "Files",
+    "noFiles": "Files appear once the metadata arrives.",
+    "magnet": "Magnet",
+    "copyLink": "Copy the link for a player",
+    "watchInBrowser": "Watch in the browser",
+    "viewed": "watched",
+    "download": "Download",
+    "upload": "Upload",
+    "peers": "Peers",
+    "loaded": "Loaded",
+    "notFound": "Torrent not found",
+    "externalPlayer": "In an external player",
+    "fromLast": "Playlist from the last watched",
+    "stats": "Statistics"
+  }
 }

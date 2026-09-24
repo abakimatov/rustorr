@@ -1,9 +1,10 @@
 @import "tailwindcss";
+@import "./fonts.css";
 
 /* Design tokens: cool graphite neutrals and one indigo accent, light by
    default, dark by the system setting or an explicit choice (`data-theme`). */
 @theme {
-  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Onest Variable", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 

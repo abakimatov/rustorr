@@ -33,3 +33,17 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   const text = await response.text()
   return (text ? JSON.parse(text) : undefined) as T
 }
+
+/** What to show a person: the server's `{"error": …}` text when there is one. */
+export function errorText(error: unknown): string {
+  if (error instanceof HttpError) {
+    try {
+      const parsed = JSON.parse(error.body) as { error?: unknown }
+      if (typeof parsed.error === 'string' && parsed.error) return parsed.error
+    } catch {
+      // Not JSON: the body or the status is the message.
+    }
+    return error.body.trim() || `HTTP ${error.status}`
+  }
+  return error instanceof Error ? error.message : String(error)
+}
