@@ -76,8 +76,9 @@ pub trait Host: Send + Sync {
     /// The file's length from the torrent's status, if the torrent is loaded
     /// and knows it.
     fn file_size(&self, hash: &str, file_id: &str) -> BoxFuture<'_, Option<i64>>;
-    /// `torrentHeartbeatState`: the cache state, or `{"Hash", "Torrent"}`.
-    fn heartbeat(&self, hash: &str) -> BoxFuture<'_, serde_json::Value>;
+    /// `torrentHeartbeatState` as JSON: the cache state, or `{"Hash",
+    /// "Torrent"}`.
+    fn heartbeat(&self, hash: &str) -> BoxFuture<'_, Vec<u8>>;
     /// `torr.DropTorrent`.
     fn drop_torrent(&self, hash: &str) -> BoxFuture<'_, ()>;
     /// `gst-discoverer-1.0 -v -t 30 <url>`: its combined output and error.

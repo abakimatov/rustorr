@@ -30,6 +30,7 @@ use serde_json::Value;
 use crate::{
     ApiError,
     app::{AppState, cache_view, json_response, management_authorized, unauthorized},
+    error::go_json,
     go_decode::{self, OrderedObject},
 };
 
@@ -131,22 +132,25 @@ impl Host for HttpHost {
         })
     }
 
-    fn heartbeat(&self, hash: &str) -> BoxFuture<'_, Value> {
+    fn heartbeat(&self, hash: &str) -> BoxFuture<'_, Vec<u8>> {
+        /// `heartbeatState`.
+        #[derive(serde::Serialize)]
+        struct State {
+            #[serde(rename = "Hash")]
+            hash: String,
+            #[serde(rename = "Torrent", skip_serializing_if = "Option::is_none")]
+            torrent: Option<rustorr_lifecycle::TorrentView>,
+        }
         let hash = hash.to_string();
         Box::pin(async move {
-            let bare = serde_json::json!({ "Hash": hash });
-            let Ok(info_hash) = hash.parse::<InfoHash>() else {
-                return bare;
-            };
-            if let Ok(view) = cache_view(self.core.as_ref(), info_hash).await
-                && let Ok(value) = serde_json::to_value(view)
+            if let Ok(info_hash) = hash.parse::<InfoHash>()
+                && let Ok(view) = cache_view(self.core.as_ref(), info_hash).await
+                && let Ok(bytes) = go_json(&view)
             {
-                return value;
+                return bytes;
             }
-            match self.torrent(&hash).await {
-                Some(torrent) => serde_json::json!({ "Hash": hash, "Torrent": torrent }),
-                None => bare,
-            }
+            let torrent = self.torrent(&hash).await;
+            go_json(&State { hash, torrent }).unwrap_or_default()
         })
     }
 
@@ -318,11 +322,18 @@ pub(crate) async fn get_settings(
     let config = tokio::task::spawn_blocking(move || service.current_config())
         .await
         .map_err(|_| empty(StatusCode::INTERNAL_SERVER_ERROR))?;
-    json_response(serde_json::json!({
-        "built_in": true,
-        "config": config,
-        "defaults": Config::platform_defaults().normalized(),
-    }))
+    /// `gstreamerSettingsResponse`: a struct, so its fields keep their order.
+    #[derive(serde::Serialize)]
+    struct SettingsResponse {
+        built_in: bool,
+        config: Config,
+        defaults: Config,
+    }
+    json_response(SettingsResponse {
+        built_in: true,
+        config,
+        defaults: Config::platform_defaults().normalized(),
+    })
     .map_err(IntoResponse::into_response)
 }
 
@@ -560,7 +571,12 @@ async fn heartbeat(
     if service.get(&hash).is_none() {
         return empty(StatusCode::NOT_FOUND);
     }
-    json_response(service.host().heartbeat(&hash).await).unwrap_or_else(IntoResponse::into_response)
+    let body = service.host().heartbeat(&hash).await;
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 async fn probe(
@@ -1048,6 +1064,13 @@ mod tests {
         let (status, body) =
             module_call(false, store.clone(), Method::GET, "/gst/settings", "").await;
         assert_eq!(status, StatusCode::OK);
+        // Go struct order, not sorted keys.
+        assert!(
+            body.starts_with(
+                r#"{"built_in":true,"config":{"GSTVersion":1.24,"GSTPath":"","Source":"play""#
+            ),
+            "{body}"
+        );
         let body: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["built_in"], true);
         assert_eq!(body["config"]["SegmentSeconds"], 4);

@@ -176,6 +176,17 @@ def normalize_strings(value: Any, patterns: list[dict[str, str]]) -> tuple[Any, 
     return value, False
 
 
+def key_order(value: Any) -> Any:
+    """The order of object keys, recursively: JSON is compared as decoded
+    values, which ignore it, but Go writes struct fields in declaration order
+    and clients may read the text."""
+    if isinstance(value, dict):
+        return [[key, key_order(item)] for key, item in value.items()]
+    if isinstance(value, list):
+        return [key_order(item) for item in value]
+    return None
+
+
 def comparable(case: dict[str, Any], normalization: dict[str, Any]) -> dict[str, Any]:
     response = case["response"]
     headers = normalize_headers(response.get("headers", {}), normalization.get("headers", {}))
@@ -192,7 +203,17 @@ def comparable(case: dict[str, Any], normalization: dict[str, Any]) -> dict[str,
         "status": response["status"],
         "headers": headers,
         "json": semantic_json,
+        "json_key_order": None,
     }
+    if semantic_json is not None and response.get("body_base64"):
+        # The corpus stores decoded JSON with sorted keys; the order comes
+        # from the raw body, with the same dynamic paths removed.
+        try:
+            ordered = json.loads(base64.b64decode(response["body_base64"]))
+        except ValueError:
+            ordered = None
+        ordered, _ = normalize_json(ordered, json_paths)
+        result["json_key_order"] = key_order(ordered)
     if semantic_json is None:
         body = base64.b64decode(response["body_base64"])
         content_type = headers.get("content-type", "")
