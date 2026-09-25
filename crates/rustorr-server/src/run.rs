@@ -19,6 +19,7 @@ use tracing::{info, warn};
 use crate::{
     config::{CacheMode, Config, engine_proxy, public_ip},
     discovery::DiscoveryService,
+    tls,
 };
 
 /// The version clients see in `/echo`, Bonjour TXT records and MSX.
@@ -45,7 +46,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         ..HttpConfig::default()
     };
 
-    let listener = Listeners::bind(&config.listen)
+    let mut listener = Listeners::bind(&config.listen)
         .await
         .context("cannot listen on")?;
     let addresses = listener
@@ -74,6 +75,37 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let schema_version = state
         .schema_version()
         .context("cannot read the schema version")?;
+    let https = tls::prepare(
+        &tls::Options {
+            enabled: config.ssl,
+            port: config.ssl_port,
+            cert: config.ssl_cert.as_deref(),
+            key: config.ssl_key.as_deref(),
+            force_https: config.force_https,
+            read_only: config.read_only,
+        },
+        &config.data_dir,
+        &state,
+    )?;
+    if let Some(https) = &https {
+        let tls_addresses: Vec<SocketAddr> = config
+            .listen
+            .iter()
+            .map(|address| SocketAddr::new(address.ip(), https.port))
+            .collect();
+        listener
+            .bind_tls(&tls_addresses, Arc::clone(&https.config))
+            .await
+            .context("cannot listen for HTTPS on")?;
+        if config.force_https {
+            listener.redirect_to_https(https.port);
+        }
+        info!(
+            addresses = ?listener.tls_addrs().context("cannot read the HTTPS addresses")?,
+            force_https = config.force_https,
+            "HTTPS listening"
+        );
+    }
     let proxy_url = engine_proxy(config.proxy_url.as_deref(), config.proxy_mode.as_deref())
         .map_err(anyhow::Error::msg)?;
     if proxy_url.is_some() {

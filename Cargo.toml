@@ -51,6 +51,12 @@ mime_guess = "2"
 percent-encoding = "2"
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "crypto", "pem"] }
+x509-parser = { version = "0.18", default-features = false }
+time = "0.3"
 quick-xml = "0.41"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 socket2 = { version = "0.6", features = ["all"] }

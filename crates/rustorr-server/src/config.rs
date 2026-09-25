@@ -23,6 +23,29 @@ pub struct Config {
     )]
     pub listen: Vec<SocketAddr>,
 
+    /// Serve HTTPS as well, as MatriX.145's `--ssl`, on `--ssl-port` with
+    /// `--ssl-cert` and `--ssl-key`; without them the files remembered in
+    /// the settings are used, else a self-signed pair is made in the data
+    /// directory. The port and files given are stored in the settings.
+    #[arg(long, env = "RUSTORR_SSL")]
+    pub ssl: bool,
+
+    /// HTTPS port on every `--listen` address; the stored one, else 8091.
+    #[arg(long, env = "RUSTORR_SSL_PORT")]
+    pub ssl_port: Option<u16>,
+
+    /// PEM certificate chain for HTTPS; needs `--ssl-key`.
+    #[arg(long, env = "RUSTORR_SSL_CERT")]
+    pub ssl_cert: Option<PathBuf>,
+
+    /// PEM private key for HTTPS; needs `--ssl-cert`.
+    #[arg(long, env = "RUSTORR_SSL_KEY")]
+    pub ssl_key: Option<PathBuf>,
+
+    /// Answer plain HTTP with a redirect to HTTPS; needs `--ssl`.
+    #[arg(long, env = "RUSTORR_FORCE_HTTPS")]
+    pub force_https: bool,
+
     /// Directory for everything Rustorr stores. It holds the database, the
     /// engine's files and, in disk mode, the cache.
     #[arg(long, env = "RUSTORR_DATA_DIR", default_value = "data")]

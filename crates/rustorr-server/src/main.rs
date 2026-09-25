@@ -6,6 +6,7 @@ mod discovery;
 mod logging;
 mod maintenance;
 mod run;
+mod tls;
 
 use std::{process::ExitCode, time::Duration};
 
