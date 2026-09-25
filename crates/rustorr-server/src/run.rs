@@ -143,11 +143,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     let engine_status = engine.status();
     let engine_port: Arc<dyn Engine> = engine.clone();
-    let torrents = Arc::new(
-        TorrentCoordinator::new(engine_port, Arc::clone(&cache), Arc::clone(&state))
-            .with_trackers_file(config.data_dir.join("trackers.txt"))
-            .with_read_only(config.read_only),
-    );
+    let torrents = TorrentCoordinator::new(engine_port, Arc::clone(&cache), Arc::clone(&state))
+        .with_trackers_file(config.data_dir.join("trackers.txt"))
+        .with_read_only(config.read_only)
+        .shared();
     if let Some(dir) = &config.torrents_dir {
         tokio::spawn(Arc::clone(&torrents).watch_torrents_dir(dir.clone(), Duration::from_secs(1)));
     }

@@ -194,6 +194,9 @@ pub struct TorrentCoordinator {
     next_idle_id: AtomicU64,
     trackers_file: Option<PathBuf>,
     read_only: bool,
+    /// Set by [`Self::shared`]; the idle timer holds this instead of the
+    /// coordinator, so a timer never keeps it alive.
+    this: Weak<Self>,
 }
 
 impl TorrentCoordinator {
@@ -239,7 +242,17 @@ impl TorrentCoordinator {
             next_idle_id: AtomicU64::new(1),
             trackers_file: None,
             read_only: false,
+            this: Weak::new(),
         }
+    }
+
+    /// The coordinator behind an `Arc`, as the server runs it: the idle
+    /// timer needs a handle back to it.
+    pub fn shared(self) -> Arc<Self> {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
+            ..self
+        })
     }
 
     /// MatriX.145's read-only DB mode: writes to the catalog, settings,
@@ -473,6 +486,7 @@ impl TorrentCoordinator {
             let mut view = self.view_live(&live).await;
             view.stat = 0;
             view.stat_string = "Torrent added".into();
+            self.schedule_idle_detach(hash).await;
             return Ok(view);
         }
         // A catalog entry keeps its metainfo: a saved torrent added again by
@@ -552,6 +566,10 @@ impl TorrentCoordinator {
             self.persist(&stored)?;
         }
         self.live.lock().await.insert(hash, stored);
+        // MatriX.145 starts the idle timer when a torrent is added, not only
+        // when a viewer leaves: a torrent nobody opens is detached after
+        // TorrentDisconnectTimeout instead of downloading and seeding on.
+        self.schedule_idle_detach(hash).await;
         view.stat = 0;
         view.stat_string = "Torrent added".into();
         Ok(view)
@@ -919,14 +937,17 @@ impl TorrentCoordinator {
         }
     }
 
-    async fn schedule_idle_detach(self: &Arc<Self>, hash: InfoHash) {
-        if self.ensure_unpinned(hash).is_err() || !self.engine.is_loaded(hash) {
+    async fn schedule_idle_detach(&self, hash: InfoHash) {
+        if self.this.strong_count() == 0
+            || self.ensure_unpinned(hash).is_err()
+            || !self.engine.is_loaded(hash)
+        {
             return;
         }
         self.stop_idle_detach_locked(hash).await;
         let timeout = u64::try_from(self.settings().torrent_disconnect_timeout).unwrap_or_default();
         let id = self.next_idle_id.fetch_add(1, Ordering::Relaxed);
-        let weak = Arc::downgrade(self);
+        let weak = self.this.clone();
         let handle = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(timeout)).await;
             let Some(coordinator) = weak.upgrade() else {
@@ -1349,11 +1370,9 @@ mod tests {
             let state = Arc::new(State::open_in_memory().unwrap());
             let engine = Arc::new(FakeEngine::new(Arc::clone(&cache)));
             let engine_port: Arc<dyn Engine> = engine.clone();
-            let coordinator = Arc::new(TorrentCoordinator::new(
-                engine_port,
-                Arc::clone(&cache),
-                Arc::clone(&state),
-            ));
+            let coordinator =
+                TorrentCoordinator::new(engine_port, Arc::clone(&cache), Arc::clone(&state))
+                    .shared();
             Self {
                 cache,
                 state,
@@ -1445,6 +1464,46 @@ mod tests {
 
         assert!(!fixture.engine.is_loaded(entry.hash));
         assert!(fixture.state.torrent(entry.hash).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_torrent_nobody_opens_is_detached_after_the_idle_timeout() {
+        let fixture = Fixture::new(1_000);
+        fixture
+            .coordinator
+            .set_settings(Settings {
+                torrent_disconnect_timeout: 1,
+                ..fixture.coordinator.settings()
+            })
+            .await
+            .unwrap();
+        let entry = fixture.add(1).await;
+        assert!(fixture.engine.is_loaded(entry.hash));
+
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+
+        assert!(!fixture.engine.is_loaded(entry.hash));
+        assert!(fixture.state.torrent(entry.hash).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn opening_a_torrent_stops_the_idle_timer_started_by_adding_it() {
+        let fixture = Fixture::new(1_000);
+        fixture
+            .coordinator
+            .set_settings(Settings {
+                torrent_disconnect_timeout: 1,
+                ..fixture.coordinator.settings()
+            })
+            .await
+            .unwrap();
+        let entry = fixture.add(1).await;
+        let reader = fixture.coordinator.play(entry.hash, 1, 0).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+
+        assert!(fixture.engine.is_loaded(entry.hash));
+        drop(reader);
     }
 
     #[tokio::test]
