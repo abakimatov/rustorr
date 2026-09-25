@@ -62,6 +62,16 @@ def canonical_dav_xml(body: bytes) -> bytes | None:
     return declaration + json.dumps(canon(root, ""), ensure_ascii=False).encode()
 
 
+DIDL_DATE = re.compile(rb"(&lt;dc:date&gt;|<dc:date>)[0-9T:.+Z-]+(&lt;/dc:date&gt;|</dc:date>)")
+
+
+def didl_without_dates(body: bytes) -> bytes:
+    """DLNA Browse results carry `dc:date`, the day of the capture or of the
+    fixture torrents' addition; a cached reference snapshot from another day
+    differs there only. The value is replaced, escaped or not."""
+    return DIDL_DATE.sub(rb"\1<date>\2", body)
+
+
 MP4_CONTAINERS = {b"moov", b"trak", b"mdia"}
 MP4_TIMED = {b"mvhd", b"tkhd", b"mdhd"}
 
@@ -227,6 +237,8 @@ def comparable(case: dict[str, Any], normalization: dict[str, Any]) -> dict[str,
             body = canonical
         if content_type == "video/mp4":
             body = mp4_without_times(body)
+        if b"dc:date" in body:
+            body = didl_without_dates(body)
         result["body_sha256"] = hashlib.sha256(body).hexdigest()
         result["body_bytes"] = len(body)
     return result

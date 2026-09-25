@@ -668,6 +668,14 @@ impl Service {
     }
 
     /// `Get`.
+    /// Tasks that are not disposed of, for metrics.
+    pub fn task_count(&self) -> usize {
+        lock(&self.tasks)
+            .values()
+            .filter(|task| !task.is_disposed())
+            .count()
+    }
+
     pub fn get(&self, id: &str) -> Option<Arc<Task>> {
         if id.is_empty() || self.disposed.load(Ordering::SeqCst) {
             return None;

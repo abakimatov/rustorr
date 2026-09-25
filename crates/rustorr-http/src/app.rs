@@ -89,6 +89,7 @@ pub(crate) struct AppState {
     pub(crate) webdav: Option<Arc<WebDav>>,
     /// Present when a GStreamer runtime was provided.
     pub(crate) gstreamer: Option<Arc<rustorr_gstreamer::service::Service>>,
+    pub(crate) metrics: Arc<crate::metrics::HttpMetrics>,
 }
 
 pub fn router(info: ServerInfo) -> Router {
@@ -129,9 +130,11 @@ pub fn router_with_services(
         http,
         webdav,
         gstreamer,
+        metrics: Arc::default(),
     };
     let routes = Router::new()
         .route("/echo", get(echo_state))
+        .route("/metrics", get(crate::metrics::handler))
         .route("/torrents", post(torrents))
         .route("/torrent/upload", post(upload))
         .route("/settings", post(settings))
@@ -209,7 +212,8 @@ pub fn router_with_services(
         .layer(from_fn_with_state(state.clone(), waf))
         .layer(map_response(without_allow_on_404))
         // gin's first middleware: every request is logged, blocked or not.
-        .layer(from_fn_with_state(state, access_log::middleware))
+        .layer(from_fn_with_state(state.clone(), access_log::middleware))
+        .layer(from_fn_with_state(state, crate::metrics::middleware))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<Body>| {

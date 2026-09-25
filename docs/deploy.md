@@ -144,6 +144,35 @@ tools/deploy.sh user@server logs -f
 попадают. Образ проверяет себя (`rustorr health`), состояние видно в
 `status` и `docker ps`.
 
+Метрики Prometheus — `GET /metrics` (за той же авторизацией, что API):
+торренты загруженные и сохранённые, пиры, скорости загрузки и отдачи,
+заполненность кэша, открытые потоки, задачи HLS, HTTP-запросы по методу и
+коду, время до заголовков ответа, память и дескрипторы процесса. Пример
+для Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: rustorr
+    basic_auth: { username: admin, password: … }
+    static_configs: [{ targets: ["server:8090"] }]
+```
+
+## Замена TorrServer
+
+Rustorr понимает флаги MatriX (`-p/--port`, `-i/--ip`, `-d/--path`,
+`-a/--httpauth`, `-r/--rdb`, `-k/--dontkill`, `-t/--torrentsdir`,
+`-m/--maxsize`, `-s/--searchwa`, `-l/--logpath`, `-w/--weblogpath`,
+`--ssl`, `--sslport`, `--sslcert`, `--sslkey`, `--force-https`,
+`--proxyurl`, `--proxymode`, `--torrentaddr`, `-4/-6`, `-f/--fusepath`,
+`--webdav`) и переменные Docker-образа TorrServer (`TS_PORT`,
+`TS_CONF_PATH`, `TS_HTTPAUTH=1`, `TS_SSL_ENABLE=1` и остальные из его
+`docker-entrypoint.sh`), так что systemd-юнит или compose-файл
+TorrServer работают после замены бинарника или образа. `--ui` и токен
+Telegram принимаются и игнорируются с предупреждением. Данные TorrServer
+(`config.db`) не переносятся: список торрентов нужно добавить заново.
+Образ Rustorr работает от пользователя 65532, каталог данных должен быть
+ему доступен на запись.
+
 ## Ресурсы и трафик: допущения
 
 Замеры R1–R10 уточнят цифры; до них — порядок величин.

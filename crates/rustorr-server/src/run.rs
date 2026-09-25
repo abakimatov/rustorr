@@ -154,6 +154,12 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     #[cfg(feature = "r5-test-control")]
     start_test_control(Arc::clone(&torrents)).await?;
     warn_if_open(&addresses, config.http_auth);
+    if config.ui {
+        warn!("--ui is ignored: open the interface at the listen address in a browser");
+    }
+    if config.tgtoken.is_some() {
+        warn!("the Telegram bot is not part of Rustorr yet; the token is ignored");
+    }
     info!(
         %address,
         addresses = ?addresses,

@@ -1,6 +1,6 @@
 # План реализации Rustorr
 
-Статус: R9 `in progress` с 2026-09-25; R0–R8 завершены (R8 — ветка `r8-web`). Этот документ — рабочая точка продолжения между сессиями. Один этап получает статус `in progress` только после явного запуска работ; переход в `done` требует выполнения его критериев выхода и записи доказательств.
+Статус: R0–R9 завершены (R9 — 2026-09-25, ветка `r9-deploy`). Этот документ — рабочая точка продолжения между сессиями. Один этап получает статус `in progress` только после явного запуска работ; переход в `done` требует выполнения его критериев выхода и записи доказательств.
 
 ## Зафиксированный контекст
 
@@ -145,7 +145,7 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 
 Выход: smoke-тесты чистой установки, обновления, перезапуска и отката; задокументированные допущения о ресурсах и трафике; никаких секретов в образах и логах.
 
-Статус: `in progress` с 2026-09-25. Решение пользователя: развёртывание через Docker по SSH; план — в [`r9-plan.md`](r9-plan.md).
+Статус: `done` (2026-09-25). Решение пользователя: развёртывание через Docker по SSH; план — в [`r9-plan.md`](r9-plan.md), доказательства — в [`r9-continuation.md`](r9-continuation.md), инструкция — [`deploy.md`](deploy.md).
 
 ### R10 — Гейты производительности и release candidate
 
@@ -182,7 +182,7 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 
 ## Текущая контрольная точка
 
-- Текущий этап: R9 `in progress` с 2026-09-25 (ветка `r9-deploy`); R0–R8 завершены.
+- Текущий этап: R9 `done` (2026-09-25, ветка `r9-deploy`); R0–R9 завершены.
 - R6 закоммичен в `master` (`8a21044`). Доказательства и команды
   воспроизведения — в [`r6-continuation.md`](r6-continuation.md).
 - Принятое отклонение `netem-delay-loss` (R5) остаётся открытым. Диагностика
@@ -192,7 +192,35 @@ Handoff: `baseline commit`, окружение, команды запуска, �
 - R7: [`r7-plan.md`](r7-plan.md), [`r7-continuation.md`](r7-continuation.md),
   [`r7-capability-matrix.md`](r7-capability-matrix.md).
 - R8: [`r8-plan.md`](r8-plan.md), [`r8-continuation.md`](r8-continuation.md).
-- Следующее действие: R9 по [`r9-plan.md`](r9-plan.md).
+- R9: [`r9-plan.md`](r9-plan.md), [`r9-continuation.md`](r9-continuation.md), [`deploy.md`](deploy.md).
+- Следующее действие: запуск R10 пользователем.
+
+### Handoff 2026-09-25 — R9 завершён
+
+- Статус: R9 `done`.
+- Выполненная цель: развёртывание через Docker по SSH (решение
+  пользователя): `tools/deploy.sh`, `deploy/`, бэкап/восстановление,
+  встроенный HTTPS как у MatriX, метрики Prometheus, флаги и `TS_*`
+  TorrServer.
+- Изменённые файлы/артефакты: ветка `r9-deploy`; `rustorr health|backup|
+  restore|passwd`; `crates/rustorr-server/src/{maintenance,tls}.rs`;
+  `rustorr-http` — TLS/редирект в `Listeners`, `/metrics`, маскирование
+  access-лога; `rustorr-state` — `snapshot`/`inspect`; `tools/deploy.sh`,
+  `tools/r9.sh`, `tools/r9/`; `docs/deploy.md`.
+- Выполненные команды/тесты: `tools/r4.sh check` (386), `tools/r4.sh smoke`
+  (amd64 и arm64), `tools/r9.sh smoke`, `tools/r4.sh e2e`,
+  `tools/r2.sh compare` для `direct`, `r7`, `r7-gst`.
+- Доказательства и результаты: `/tmp/rustorr-contract/r95-*`.
+- Принятые решения: реестр не нужен (образ по SSH), образ по умолчанию
+  без `ffmpeg`; авторизация включается деплоем, бинарник — как MatriX с
+  предупреждением; отвергнутый сертификат оператора не затирается.
+- Открытые риски/вопросы: образ передаётся целиком; импорт `config.db`
+  TorrServer; неприменяемые сетевые поля `BTSets`.
+- Точное следующее действие: запуск R10 пользователем; слияние веток
+  `r7-search`, `r8-web`, `r9-deploy` в `master` — по решению
+  пользователя.
+- Исходный каталог/commit/конфигурация: `/Users/keito/Documents/pets/rustorr`,
+  ветка `r9-deploy`.
 
 ### Handoff 2026-09-24 — R8 завершён
 

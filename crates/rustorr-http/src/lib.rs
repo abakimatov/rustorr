@@ -17,6 +17,7 @@ mod gstreamer_api;
 mod listeners;
 mod m3u;
 mod media_type;
+mod metrics;
 mod msx_api;
 mod range;
 mod search_api;

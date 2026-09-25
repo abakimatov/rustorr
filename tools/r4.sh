@@ -82,9 +82,18 @@ E2E_COMPOSE="docker compose -f ${ROOT}/docker-compose.baseline.yml -f ${ROOT}/do
 e2e() {
   doctor
   in_web sh -c 'npm ci --no-audit --no-fund >/dev/null'
-  ${E2E_COMPOSE} up -d tracker seeder
-  ${E2E_COMPOSE} restart -t 0 tracker
-  ${E2E_COMPOSE} restart -t 10 seeder
+  # As tools/r2.sh reset-seeder: both recreated (the fixtures are complete
+  # before the seeder starts), then wait until it seeds and has announced.
+  ${E2E_COMPOSE} up -d --force-recreate tracker seeder
+  ready=0
+  for _ in $(seq 1 60); do
+    seeder=$(${E2E_COMPOSE} ps -q seeder)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "${seeder}" 2>/dev/null || true)
+    announced=$(${E2E_COMPOSE} exec -T seeder transmission-remote 127.0.0.1:9091 -t 1 -it 2>/dev/null | grep -c 'Tracker had 1 seeders' || true)
+    if [ "${health}" = healthy ] && [ "${announced}" -ge 1 ]; then ready=1; break; fi
+    sleep 1
+  done
+  [ "${ready}" = 1 ] || { echo "error: the seeder did not become ready" >&2; return 1; }
   ${E2E_COMPOSE} build e2e-rustorr e2e
   ${E2E_COMPOSE} up -d --force-recreate --renew-anon-volumes e2e-rustorr
   status=0

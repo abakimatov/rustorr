@@ -10,11 +10,10 @@ mod tls;
 
 use std::{process::ExitCode, time::Duration};
 
-use clap::Parser;
 use tracing::{error, info};
 
 fn main() -> ExitCode {
-    let mut config = config::Config::parse();
+    let mut config = config::Config::from_env_and_args();
     if let Some(command) = config.command.take() {
         return service_command(command, &config);
     }
