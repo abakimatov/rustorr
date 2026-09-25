@@ -195,6 +195,10 @@ pub enum Command {
     /// HTTPS certificate) to FILE as `.tar.gz`. Safe while the server runs;
     /// the cache is not included.
     Backup { file: PathBuf },
+    /// Set the password of an HTTP account in `<data-dir>/accs.db`, read
+    /// from the first line of standard input; the account is added if new.
+    /// Takes effect when the server next starts.
+    Passwd { user: String },
     /// Restore a backup into the data directory. Stop the server first.
     Restore {
         file: PathBuf,

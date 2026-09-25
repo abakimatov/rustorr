@@ -137,9 +137,14 @@ pub fn load(cert: &Path, key: &Path) -> anyhow::Result<Arc<ServerConfig>> {
         .key_provider
         .load_private_key(private.clone_key())
         .context("unsupported private key")?;
+    // Parses the certificate as TLS will (an X.509 v1 certificate fails
+    // here) and checks that the key is its own.
     CertifiedKey::new(chain.clone(), signing)
         .keys_match()
-        .context("the key does not belong to the certificate")?;
+        .context(
+            "the certificate cannot be used with this key (TLS takes an X.509 v3 \
+             certificate with an RSA or named-curve EC key, and the key must be its own)",
+        )?;
     let mut config = ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .with_no_client_auth()
@@ -305,7 +310,7 @@ mod tests {
             load(&cert, &other_key)
                 .unwrap_err()
                 .to_string()
-                .contains("does not belong")
+                .contains("cannot be used with this key")
         );
         let https = prepare(
             &Options {

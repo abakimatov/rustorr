@@ -22,8 +22,16 @@ const DATABASE: &str = "rustorr.db";
 const MANIFEST: &str = "backup.json";
 const FORMAT: u64 = 1;
 /// Files beside the database that belong to the state: accounts, the extra
-/// trackers list and the HTTPS certificate and key made or given at start-up.
-const STATE_FILES: &[&str] = &["accs.db", "trackers.txt", "server.pem", "server.key"];
+/// trackers list, the self-signed HTTPS pair and an operator's own pair as
+/// `tools/deploy.sh cert` stores it.
+const STATE_FILES: &[&str] = &[
+    "accs.db",
+    "trackers.txt",
+    "server.pem",
+    "server.key",
+    "tls-cert.pem",
+    "tls-key.pem",
+];
 
 /// Whether the server answers HTTP on `listen`: any response counts, since
 /// `/echo` may sit behind authentication or a redirect to HTTPS.
@@ -191,6 +199,37 @@ pub fn restore(data_dir: &Path, file: &Path, force: bool) -> anyhow::Result<Vec<
     Ok(files)
 }
 
+/// Adds or updates an account in `<data-dir>/accs.db`, MatriX.145's JSON
+/// map of user to password, keeping the file private to its owner.
+pub fn set_password(data_dir: &Path, user: &str, password: &str) -> anyhow::Result<()> {
+    ensure!(!user.is_empty(), "the user name is empty");
+    ensure!(!password.is_empty(), "the password is empty");
+    ensure!(
+        !user.contains(':'),
+        "a user name cannot contain `:` in HTTP Basic authentication"
+    );
+    let path = data_dir.join("accs.db");
+    let mut accounts: serde_json::Map<String, Value> = match fs::read(&path) {
+        Ok(bytes) if !bytes.is_empty() => serde_json::from_slice(&bytes)
+            .with_context(|| format!("{} is not an accounts file", path.display()))?,
+        Ok(_) => serde_json::Map::new(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+        Err(error) => return Err(error).with_context(|| format!("cannot read {}", path.display())),
+    };
+    accounts.insert(user.to_owned(), Value::String(password.to_owned()));
+    fs::create_dir_all(data_dir)
+        .with_context(|| format!("cannot create {}", data_dir.display()))?;
+    let mut file = tempfile::Builder::new()
+        .prefix(".accs-")
+        .tempfile_in(data_dir)
+        .context("cannot write the accounts file")?;
+    file.write_all(&serde_json::to_vec(&accounts)?)?;
+    file.as_file().sync_all()?;
+    file.persist(&path)
+        .with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(())
+}
+
 /// The first address the server listens on, for `health`.
 pub fn first_listen(listen: &[SocketAddr]) -> SocketAddr {
     listen
@@ -305,6 +344,25 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("unexpected entry notes.txt"), "{error}");
+    }
+
+    #[test]
+    fn passwords_are_added_and_changed_in_a_private_file() {
+        let dir = tempfile::tempdir().unwrap();
+        set_password(dir.path(), "admin", "one\"two").unwrap();
+        set_password(dir.path(), "tv", "x").unwrap();
+        set_password(dir.path(), "admin", "three").unwrap();
+        let path = dir.path().join("accs.db");
+        let accounts: serde_json::Map<String, Value> =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(accounts["admin"], "three");
+        assert_eq!(accounts["tv"], "x");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(rustorr_http::Credentials::read(&path).is_ok());
+        assert!(set_password(dir.path(), "a:b", "x").is_err());
     }
 
     #[test]

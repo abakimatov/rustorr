@@ -64,6 +64,20 @@ fn service_command(command: config::Command, config: &config::Config) -> ExitCod
         .map(|status| eprintln!("healthy: HTTP {status}")),
         config::Command::Backup { file } => maintenance::backup(&config.data_dir, &file)
             .map(|files| eprintln!("backup written to {}: {}", file.display(), files.join(", "))),
+        config::Command::Passwd { user } => {
+            let mut password = String::new();
+            std::io::stdin()
+                .read_line(&mut password)
+                .map_err(anyhow::Error::from)
+                .and_then(|_| {
+                    maintenance::set_password(
+                        &config.data_dir,
+                        &user,
+                        password.trim_end_matches(['\r', '\n']),
+                    )
+                })
+                .map(|()| eprintln!("password set for {user}"))
+        }
         config::Command::Restore { file, force } => {
             maintenance::restore(&config.data_dir, &file, force).map(|files| {
                 eprintln!(
