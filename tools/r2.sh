@@ -3,7 +3,9 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 COMPOSE="docker compose -f ${ROOT}/docker-compose.baseline.yml -f ${ROOT}/docker-compose.r2-hermetic.yml"
-R6_COMPOSE="${COMPOSE} -f ${ROOT}/docker-compose.r6-contract.yml"
+# RUSTORR_R2_CANDIDATE_OVERLAY adds a compose file to every candidate
+# configuration, e.g. docker-compose.r10-amd64.yml for the other architecture.
+R6_COMPOSE="${COMPOSE} -f ${ROOT}/docker-compose.r6-contract.yml${RUSTORR_R2_CANDIDATE_OVERLAY:+ -f ${ROOT}/${RUSTORR_R2_CANDIDATE_OVERLAY}}"
 PROXY_COMPOSE="${COMPOSE} -f ${ROOT}/docker-compose.r2-proxy.yml"
 R6_PROXY_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r6-proxy.yml"
 AUTH_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r6-auth.yml"

@@ -1,0 +1,7 @@
+# The contract candidate built and run for linux/amd64 (R10.3); on an arm64
+# host it runs under emulation. Used through
+# RUSTORR_R2_CANDIDATE_OVERLAY=docker-compose.r10-amd64.yml tools/r2.sh compare …
+services:
+  rustorr:
+    image: rustorr-r1-rustorr-amd64
+    platform: linux/amd64

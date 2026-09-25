@@ -42,7 +42,14 @@ ENV CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
 ARG RUSTORR_BUILD_PACKAGES=""
 RUN if [ -n "${RUSTORR_BUILD_PACKAGES}" ]; then \
         dpkg --add-architecture "${TARGETARCH}" \
+        # Multi-Arch libraries must have the same version on both
+        # architectures, and bookworm-security publishes them per
+        # architecture at different times; the builder only links against
+        # them, so it takes both from bookworm itself.
+        && printf 'Package: *\nPin: release l=Debian-Security\nPin-Priority: 1\n' \
+            > /etc/apt/preferences.d/builder-without-security \
         && apt-get update \
+        && apt-get upgrade -y --allow-downgrades \
         && apt-get install -y --no-install-recommends pkg-config \
             $(for package in ${RUSTORR_BUILD_PACKAGES}; do printf '%s:%s ' "${package}" "${TARGETARCH}"; done) \
         && rm -rf /var/lib/apt/lists/*; \
