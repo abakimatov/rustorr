@@ -1,6 +1,6 @@
 # R10 — гейты производительности и release candidate
 
-Статус: `in progress` с 2026-09-25.
+Статус: `done` 2026-09-25; доказательства — [`r10-continuation.md`](r10-continuation.md).
 
 ## Цель
 

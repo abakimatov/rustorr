@@ -5,7 +5,7 @@
 Bonjour, поиск Rutor и Torznab, WebDAV и FUSE, HLS через GStreamer — и
 новый веб-интерфейс на русском и английском.
 
-Статус: release candidate `1.0.0-rc.1`. Совместимость проверяется
+Статус: release candidate `1.0.0-rc.2`. Совместимость проверяется
 чёрным ящиком против закреплённого MatriX.145 (`tools/r2.sh`), скорость
 старта и перемотки — стендом R1 (`tools/baseline/r1.sh`).
 
