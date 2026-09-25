@@ -120,18 +120,71 @@ impl LibrqbitEngine {
         })
     }
 
+    /// A magnet's metadata on its own, before the torrent is added.
+    ///
+    /// Adding a magnet directly, librqbit resolves the metadata over peer
+    /// connections of its own and reconnects to the same peers for the
+    /// torrent 40 ms later, with the same peer id. A peer still holding the
+    /// first connection (Transmission does) refuses the duplicate, and
+    /// librqbit tries it again only after 10–20 s: with one seeder, playback
+    /// waits that long although the metadata came in seconds. So the metadata
+    /// is fetched alone, its connections are given time to close, and the
+    /// torrent is added from it with the peers found. `None` when the torrent
+    /// is already loaded.
+    async fn resolve_magnet(
+        &self,
+        magnet: &str,
+        options: &AddOptions,
+    ) -> Result<Option<(bytes::Bytes, Vec<std::net::SocketAddr>, Vec<String>)>, Error> {
+        /// Enough for a peer to see the metadata connection closed.
+        const SETTLE: Duration = Duration::from_millis(500);
+        let own_trackers = Magnet::parse(magnet)
+            .map(|parsed| parsed.trackers)
+            .unwrap_or_default();
+        let response = self
+            .session
+            .add_torrent(
+                AddTorrent::from_url(magnet_with_trackers(magnet.to_owned(), &options.trackers)),
+                Some(LibrqbitAddOptions {
+                    list_only: true,
+                    initial_peers: (!options.initial_peers.is_empty())
+                        .then(|| options.initial_peers.clone()),
+                    ..LibrqbitAddOptions::default()
+                }),
+            )
+            .await
+            .map_err(Error::Torrent)?;
+        match response {
+            AddTorrentResponse::ListOnly(listed) => {
+                tokio::time::sleep(SETTLE).await;
+                Ok(Some((
+                    listed.torrent_bytes,
+                    listed.seen_peers,
+                    own_trackers,
+                )))
+            }
+            AddTorrentResponse::Added(..) | AddTorrentResponse::AlreadyManaged(..) => Ok(None),
+        }
+    }
+
     async fn add_inner(
         &self,
         source: TorrentSource,
         options: AddOptions,
     ) -> Result<TorrentMetadata, Error> {
+        let mut options = options;
         // librqbit applies extra trackers to torrent files and .torrent URLs
         // but ignores them for magnets, so a magnet carries them itself.
         let source = match source {
             TorrentSource::TorrentBytes(bytes) => AddTorrent::from_bytes(bytes),
-            TorrentSource::Magnet(value) => {
-                AddTorrent::from_url(magnet_with_trackers(value, &options.trackers))
-            }
+            TorrentSource::Magnet(value) => match self.resolve_magnet(&value, &options).await? {
+                Some((bytes, seen, magnet_trackers)) => {
+                    options.initial_peers.extend(seen);
+                    options.trackers.extend(magnet_trackers);
+                    AddTorrent::from_bytes(bytes)
+                }
+                None => AddTorrent::from_url(magnet_with_trackers(value, &options.trackers)),
+            },
             TorrentSource::Url(value) => AddTorrent::from_url(value),
         };
         let response = self

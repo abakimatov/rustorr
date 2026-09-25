@@ -3140,7 +3140,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-cache"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "rustorr-domain",
  "tempfile",
@@ -3149,7 +3149,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-discovery"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "md-5",
  "nix 0.30.1",
@@ -3162,16 +3162,17 @@ dependencies = [
 
 [[package]]
 name = "rustorr-domain"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "rustorr-engine"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "librqbit",
  "librqbit-core",
  "percent-encoding",
@@ -3184,7 +3185,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-fuse"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "fuser",
  "libc",
@@ -3197,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-gstreamer"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "gstreamer",
  "gstreamer-app",
@@ -3212,7 +3213,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-http"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "async-stream",
  "axum",
@@ -3246,7 +3247,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-lifecycle"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "flate2",
  "num-bigint",
@@ -3264,7 +3265,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-search"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "flate2",
  "percent-encoding",
@@ -3279,7 +3280,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-server"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3311,7 +3312,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-state"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "rusqlite",
  "rustorr-domain",
@@ -3321,7 +3322,7 @@ dependencies = [
 
 [[package]]
 name = "rustorr-vfs"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "rustorr-lifecycle",
  "tokio",

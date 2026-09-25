@@ -2,3 +2,4 @@
 .baseline-state/
 tools/engine-spike/target/
 /target/
+/release/

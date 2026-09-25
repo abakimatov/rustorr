@@ -9,7 +9,8 @@ ARG NODE_VERSION=24
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+ARG RUSTORR_CACHE_ID=""
+RUN --mount=type=cache,id=rustorr-npm${RUSTORR_CACHE_ID},target=/root/.npm npm ci --no-audit --no-fund
 COPY web ./
 RUN npm run build
 
@@ -51,8 +52,11 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY --from=web /web/dist ./web/dist
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/workspace/target,sharing=locked \
+# A different RUSTORR_CACHE_ID builds from empty caches (tools/release.sh
+# verify: the same bytes either way).
+ARG RUSTORR_CACHE_ID=""
+RUN --mount=type=cache,id=rustorr-cargo-registry${RUSTORR_CACHE_ID},target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=rustorr-cargo-target${RUSTORR_CACHE_ID},target=/workspace/target,sharing=locked \
     case "${TARGETARCH}" in \
         arm64) target=aarch64-unknown-linux-gnu; multiarch=aarch64-linux-gnu ;; \
         amd64) target=x86_64-unknown-linux-gnu; multiarch=x86_64-linux-gnu ;; \
@@ -61,6 +65,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && export PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_PATH="/usr/lib/${multiarch}/pkgconfig" \
     && cargo build --locked --release --package rustorr-server --target "${target}" ${RUSTORR_FEATURES:+--features "${RUSTORR_FEATURES}"} \
     && install -D -m 0755 "target/${target}/release/rustorr" /out/rustorr
+
+# The binary alone, for release archives (tools/release.sh):
+# docker buildx build --target binary --output type=local,dest=<dir> .
+FROM scratch AS binary
+COPY --from=build /out/rustorr /rustorr
 
 FROM debian:bookworm-slim AS runtime
 

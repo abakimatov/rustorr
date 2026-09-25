@@ -7,7 +7,7 @@ members = ["crates/*"]
 exclude = ["tools/engine-spike"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0-rc.1"
 edition = "2024"
 rust-version = "1.90"
 publish = false

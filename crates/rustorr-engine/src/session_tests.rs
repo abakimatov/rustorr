@@ -355,3 +355,64 @@ async fn a_new_engine_reads_a_recovered_disk_range_without_a_peer() {
     );
     restarted_client.stop().await;
 }
+
+/// A magnet goes through `LibrqbitEngine`: its metadata alone first, then
+/// the torrent from that metadata with the peers found (see
+/// `resolve_magnet`), and the file downloads from them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_magnet_resolves_then_downloads_from_the_peer_it_found() {
+    use crate::{AddOptions, Engine, EngineConfig, LibrqbitEngine, TorrentSource};
+    use rustorr_domain::FileIndex;
+
+    let fixture = Fixture::new().await;
+    let scratch = tempfile::tempdir().unwrap();
+    let (seeder_session, address) = seeder(&fixture, &scratch.path().join("seeder")).await;
+    let engine = LibrqbitEngine::start(
+        EngineConfig {
+            data_dir: scratch.path().join("client"),
+            listen_port: None,
+            listen_ip: None,
+            enable_dht: false,
+            enable_trackers: false,
+            proxy_url: None,
+        },
+        cache(),
+    )
+    .await
+    .unwrap();
+
+    let magnet = format!("magnet:?xt=urn:btih:{}", fixture.hash);
+    let metadata = tokio::time::timeout(
+        TIMEOUT,
+        engine.add(
+            TorrentSource::Magnet(magnet),
+            AddOptions {
+                initial_peers: vec![address],
+                ..AddOptions::default()
+            },
+        ),
+    )
+    .await
+    .expect("adding the magnet timed out")
+    .unwrap();
+    assert_eq!(metadata.hash, fixture.hash);
+    assert_eq!(metadata.files[0].length, fixture.data.len() as u64);
+    assert!(!metadata.metainfo.is_empty());
+
+    let mut reader = engine
+        .reader(fixture.hash, FileIndex::from_zero_based(0), 0)
+        .await
+        .unwrap();
+    let mut bytes = Vec::new();
+    tokio::time::timeout(TIMEOUT, reader.read_to_end(&mut bytes))
+        .await
+        .expect("reading timed out")
+        .unwrap();
+    assert!(
+        bytes == fixture.data,
+        "streamed bytes differ from the source"
+    );
+
+    engine.shutdown().await;
+    seeder_session.stop().await;
+}
