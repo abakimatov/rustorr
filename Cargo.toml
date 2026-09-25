@@ -50,6 +50,7 @@ ipnet = "2"
 mime_guess = "2"
 percent-encoding = "2"
 flate2 = "1"
+tar = { version = "0.4", default-features = false }
 quick-xml = "0.41"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 socket2 = { version = "0.6", features = ["all"] }

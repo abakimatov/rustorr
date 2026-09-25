@@ -84,4 +84,6 @@ ENV RUSTORR_DATA_DIR=/data \
     RUSTORR_LISTEN=0.0.0.0:8090
 EXPOSE 8090
 VOLUME ["/data"]
+# The image has no curl: the binary asks itself (`rustorr health`).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["rustorr", "health"]
 ENTRYPOINT ["rustorr"]

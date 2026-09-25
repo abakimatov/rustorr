@@ -121,6 +121,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     }
     #[cfg(feature = "r5-test-control")]
     start_test_control(Arc::clone(&torrents)).await?;
+    warn_if_open(&addresses, config.http_auth);
     info!(
         %address,
         addresses = ?addresses,
@@ -474,6 +475,28 @@ impl Signals {
                 "signal ignored (--dont-kill); stop the server with GET /shutdown"
             );
         }
+    }
+}
+
+/// MatriX.145 answers everyone without a password by default, and Rustorr
+/// keeps that for existing clients; on an address other machines can reach,
+/// that deserves a word in the log.
+fn warn_if_open(addresses: &[std::net::SocketAddr], http_auth: bool) {
+    if http_auth {
+        return;
+    }
+    let reachable: Vec<String> = addresses
+        .iter()
+        .filter(|address| !address.ip().is_loopback())
+        .map(ToString::to_string)
+        .collect();
+    if !reachable.is_empty() {
+        tracing::warn!(
+            addresses = ?reachable,
+            "HTTP authentication is off on addresses other machines can reach: \
+             anyone who can connect controls this server; pass --http-auth with \
+             accounts in <data-dir>/accs.db, or bind to 127.0.0.1 behind a proxy"
+        );
     }
 }
 

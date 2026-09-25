@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use ipnet::IpNet;
 use rustorr_cache::CacheConfig;
 
@@ -152,6 +152,33 @@ pub struct Config {
     /// default `tracker` (trackers only) is not possible with this engine.
     #[arg(long, env = "RUSTORR_PROXY_MODE")]
     pub proxy_mode: Option<String>,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Service commands; without one, `rustorr` runs the server. They read the
+/// same options, so `--data-dir` and `--listen` (or their variables) apply.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Exit successfully when the server answers HTTP on its first listen
+    /// address, for container health checks.
+    Health {
+        /// Seconds to wait for the answer.
+        #[arg(long, default_value_t = 5)]
+        timeout: u64,
+    },
+    /// Write a backup of the state (database, accounts, trackers file,
+    /// HTTPS certificate) to FILE as `.tar.gz`. Safe while the server runs;
+    /// the cache is not included.
+    Backup { file: PathBuf },
+    /// Restore a backup into the data directory. Stop the server first.
+    Restore {
+        file: PathBuf,
+        /// Replace an existing database.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// `--torrentaddr`: an optional host and a port.

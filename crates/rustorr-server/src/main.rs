@@ -4,6 +4,7 @@
 mod config;
 mod discovery;
 mod logging;
+mod maintenance;
 mod run;
 
 use std::{process::ExitCode, time::Duration};
@@ -12,7 +13,10 @@ use clap::Parser;
 use tracing::{error, info};
 
 fn main() -> ExitCode {
-    let config = config::Config::parse();
+    let mut config = config::Config::parse();
+    if let Some(command) = config.command.take() {
+        return service_command(command, &config);
+    }
     if let Err(error) = logging::init(config.log_format, config.log_file.as_deref()) {
         eprintln!("cannot open the log file: {error}");
         return ExitCode::FAILURE;
@@ -43,6 +47,36 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             error!("{error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `health`, `backup` and `restore`: short-lived, they print to stderr and
+/// answer with the exit code.
+fn service_command(command: config::Command, config: &config::Config) -> ExitCode {
+    let result = match command {
+        config::Command::Health { timeout } => maintenance::health(
+            maintenance::first_listen(&config.listen),
+            Duration::from_secs(timeout),
+        )
+        .map(|status| eprintln!("healthy: HTTP {status}")),
+        config::Command::Backup { file } => maintenance::backup(&config.data_dir, &file)
+            .map(|files| eprintln!("backup written to {}: {}", file.display(), files.join(", "))),
+        config::Command::Restore { file, force } => {
+            maintenance::restore(&config.data_dir, &file, force).map(|files| {
+                eprintln!(
+                    "restored into {}: {}",
+                    config.data_dir.display(),
+                    files.join(", ")
+                )
+            })
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error:#}");
             ExitCode::FAILURE
         }
     }

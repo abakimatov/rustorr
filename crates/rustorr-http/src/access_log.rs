@@ -75,7 +75,7 @@ pub(crate) async fn middleware(
     } else {
         let (parts, body) = request.into_parts();
         let bytes = to_bytes(body, usize::MAX).await.unwrap_or_default();
-        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let text = redact_secrets(&String::from_utf8_lossy(&bytes));
         (Request::from_parts(parts, Body::from(bytes)), text)
     };
     let response = next.run(request).await;
@@ -85,6 +85,47 @@ pub(crate) async fn middleware(
         go_quote(&path)
     ));
     response
+}
+
+/// MatriX.145 logs request bodies verbatim, which puts the TMDB API key,
+/// Torznab keys and similar secrets into the access log. String values of
+/// such fields in a JSON body are masked; any other body is logged as sent.
+fn redact_secrets(body: &str) -> String {
+    fn secret(key: &str) -> bool {
+        let key = key.to_ascii_lowercase();
+        key.ends_with("key")
+            || ["password", "passwd", "secret", "token"]
+                .iter()
+                .any(|word| key.contains(word))
+    }
+    fn mask(value: &mut serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(fields) => {
+                let mut masked = false;
+                for (key, value) in fields.iter_mut() {
+                    if secret(key) && value.as_str().is_some_and(|text| !text.is_empty()) {
+                        *value = serde_json::Value::String("***".into());
+                        masked = true;
+                    } else {
+                        masked |= mask(value);
+                    }
+                }
+                masked
+            }
+            serde_json::Value::Array(items) => items
+                .iter_mut()
+                .fold(false, |masked, item| mask(item) | masked),
+            _ => false,
+        }
+    }
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return body.to_owned();
+    };
+    if mask(&mut value) {
+        value.to_string()
+    } else {
+        body.to_owned()
+    }
 }
 
 /// gin's `ClientIP` with its defaults, which MatriX.145 keeps: every proxy is
@@ -164,6 +205,30 @@ fn timestamp(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    #[test]
+    fn secrets_in_json_bodies_are_masked() {
+        let settings = r#"{"action":"set","sets":{"CacheSize":1,"TMDBSettings":{"APIKey":"abc","APIURL":"u"},"TorznabUrls":[{"Host":"h","Key":"k"}]}}"#;
+        let logged = super::redact_secrets(settings);
+        assert!(
+            !logged.contains("abc") && !logged.contains("\"k\""),
+            "{logged}"
+        );
+        assert!(logged.contains(r#""APIKey":"***""#) && logged.contains(r#""Key":"***""#));
+        assert!(logged.contains(r#""APIURL":"u""#));
+        assert_eq!(
+            super::redact_secrets(r#"{"host":"h","key":"k"}"#),
+            r#"{"host":"h","key":"***"}"#
+        );
+        // Bodies without secrets keep MatriX's exact form.
+        let plain = r#"{ "action": "list" }"#;
+        assert_eq!(super::redact_secrets(plain), plain);
+        assert_eq!(
+            super::redact_secrets(r#"{"APIKey":""}"#),
+            r#"{"APIKey":""}"#
+        );
+        assert_eq!(super::redact_secrets("not json"), "not json");
+    }
 
     use axum::http::HeaderValue;
 

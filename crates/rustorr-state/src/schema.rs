@@ -71,8 +71,9 @@ fn user_version(connection: &Connection) -> Result<u32, Error> {
 
 /// Brings the database to the latest version, one transaction per migration,
 /// so a failing migration leaves the previous version intact.
-pub(crate) fn migrate(connection: &mut Connection, migrations: &[&str]) -> Result<(), Error> {
-    let latest = migrations.len() as u32;
+/// The schema version of a Rustorr database, without changing it: refuses a
+/// file that is not a Rustorr database and one newer than `latest`.
+pub(crate) fn check(connection: &Connection, latest: u32) -> Result<u32, Error> {
     let found = user_version(connection)?;
 
     if found == 0 {
@@ -100,6 +101,12 @@ pub(crate) fn migrate(connection: &mut Connection, migrations: &[&str]) -> Resul
             supported: latest,
         });
     }
+    Ok(found)
+}
+
+pub(crate) fn migrate(connection: &mut Connection, migrations: &[&str]) -> Result<(), Error> {
+    let latest = migrations.len() as u32;
+    let found = check(connection, latest)?;
 
     for target in found + 1..=latest {
         let transaction = connection
