@@ -9,7 +9,7 @@ TARGET_VOLUME=${RUSTORR_R4_TARGET_VOLUME:-rustorr-r4-target}
 CARGO_VOLUME=${RUSTORR_R4_CARGO_VOLUME:-rustorr-r4-cargo}
 
 usage() {
-  printf '%s\n' "usage: $0 {doctor|image|check|boundaries|test|build|cross-build|smoke|cargo|clean}"
+  printf '%s\n' "usage: $0 {doctor|image|check|web-check|web|e2e|boundaries|test|build|cross-build|smoke|cargo|clean}"
   printf '%s\n' "       cargo runs any cargo command in the toolchain container, e.g. cargo generate-lockfile"
 }
 
@@ -57,13 +57,64 @@ boundaries() {
   done
 }
 
+# The web interface (R8) in Node's image. node_modules lives in a volume of
+# its own, so the container's Linux packages never replace the host's.
+WEB_IMAGE=${RUSTORR_WEB_IMAGE:-node:24-bookworm-slim}
+in_web() {
+  doctor
+  docker run --rm \
+    -v "${ROOT}/web:/web" \
+    -v rustorr-r8-node-modules:/web/node_modules \
+    -v rustorr-r8-npm-cache:/root/.npm \
+    -w /web \
+    "${WEB_IMAGE}" "$@"
+}
+
+# Type check, lint, tests and the production build, which leaves web/dist for
+# rustorr-http to embed.
+web_check() { in_web sh -c 'npm ci --no-audit --no-fund && npm run check'; }
+
+# The R8 browser scenarios (web/e2e) against Rustorr with GStreamer on the
+# fixture stand: the tracker and the seeder are restarted first, as the
+# contract harness does, so stale peers of earlier runs do not stall
+# downloads; Rustorr's data is fresh on every run.
+E2E_COMPOSE="docker compose -f ${ROOT}/docker-compose.baseline.yml -f ${ROOT}/docker-compose.r2-hermetic.yml -f ${ROOT}/docker-compose.r8-e2e.yml"
+e2e() {
+  doctor
+  in_web sh -c 'npm ci --no-audit --no-fund >/dev/null'
+  # As tools/r2.sh reset-seeder: both recreated (the fixtures are complete
+  # before the seeder starts), then wait until it seeds and has announced.
+  ${E2E_COMPOSE} up -d --force-recreate tracker seeder
+  ready=0
+  for _ in $(seq 1 60); do
+    seeder=$(${E2E_COMPOSE} ps -q seeder)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "${seeder}" 2>/dev/null || true)
+    announced=$(${E2E_COMPOSE} exec -T seeder transmission-remote 127.0.0.1:9091 -t 1 -it 2>/dev/null | grep -c 'Tracker had 1 seeders' || true)
+    if [ "${health}" = healthy ] && [ "${announced}" -ge 1 ]; then ready=1; break; fi
+    sleep 1
+  done
+  [ "${ready}" = 1 ] || { echo "error: the seeder did not become ready" >&2; return 1; }
+  ${E2E_COMPOSE} build e2e-rustorr e2e
+  ${E2E_COMPOSE} up -d --force-recreate --renew-anon-volumes e2e-rustorr
+  status=0
+  ${E2E_COMPOSE} run --rm e2e npx playwright test -c e2e/playwright.config.ts "$@" || status=$?
+  mkdir -p "${ROOT}/web/e2e/results"
+  ${E2E_COMPOSE} logs --no-color e2e-rustorr >"${ROOT}/web/e2e/results/rustorr.log" 2>&1 || true
+  ${E2E_COMPOSE} rm -sf -v e2e-rustorr e2e-seed >/dev/null
+  return "${status}"
+}
+
 check() {
+  web_check
   boundaries
   in_dev sh -c '
     set -eu
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
+    # The GStreamer variant links libgstreamer; the dev image carries it.
+    cargo clippy --package rustorr-server --all-targets --locked --features gstreamer -- -D warnings
+    cargo test --package rustorr-gstreamer --locked --features runtime
   '
 }
 
@@ -124,7 +175,7 @@ smoke() {
   done
   [ "${ready}" = 1 ] || { compose logs rustorr >&2; echo "error: Rustorr did not restart" >&2; return 1; }
   container=$(compose ps -q rustorr)
-  docker logs "${container}" 2>&1 | grep -F 'schema_version=2' >/dev/null || { docker logs "${container}" >&2; echo "error: restart did not open schema version 2" >&2; return 1; }
+  docker logs "${container}" 2>&1 | grep -F 'schema_version=3' >/dev/null || { docker logs "${container}" >&2; echo "error: restart did not open schema version 3" >&2; return 1; }
   docker stop --time 10 "${container}" >/dev/null
   [ "$(docker inspect --format '{{.State.ExitCode}}' "${container}")" = 0 ] || { docker logs "${container}" >&2; echo "error: restarted Rustorr did not exit cleanly" >&2; return 1; }
 }
@@ -140,6 +191,9 @@ case "${command}" in
   doctor) doctor ;;
   image) image ;;
   check) check ;;
+  web-check) web_check ;;
+  web) in_web "$@" ;;
+  e2e) e2e "$@" ;;
   boundaries) boundaries ;;
   test) test_all ;;
   build) build ;;

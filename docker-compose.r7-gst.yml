@@ -1,0 +1,10 @@
+# The reference built with `-tags gst`, as the official TorrServer-gst-linux-*
+# releases are, plus gst-discoverer-1.0, which that module probes files with.
+# It layers over docker-compose.r7-capability.yml.
+services:
+  torrserver:
+    image: rustorr-r7-torrserver-gst
+    build:
+      args:
+        TORRSERVER_TAGS: gst
+        EXTRA_PACKAGES: gstreamer1.0-plugins-base-apps

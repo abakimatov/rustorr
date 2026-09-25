@@ -65,7 +65,7 @@ impl Credentials {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpConfig {
     pub credentials: Option<Credentials>,
     pub trusted_proxies: Vec<IpNet>,
@@ -77,6 +77,14 @@ pub struct HttpConfig {
     pub max_stream_size: Option<u64>,
     /// Search routes skip HTTP authentication.
     pub search_without_auth: bool,
+    /// `/dav` serves the torrent file system.
+    pub webdav: bool,
+    /// The web server's port, which `/ffp` probes its own `/play` URL on.
+    pub port: u16,
+    /// The `ffprobe` binary `/ffp` runs.
+    pub ffprobe: std::path::PathBuf,
+    /// The web log (`--weblogpath`): one line per request.
+    pub access_log: Option<std::sync::Arc<crate::AccessLog>>,
 }
 
 impl Default for HttpConfig {
@@ -87,6 +95,10 @@ impl Default for HttpConfig {
             read_only: false,
             max_stream_size: None,
             search_without_auth: false,
+            webdav: false,
+            port: 8090,
+            ffprobe: std::path::PathBuf::from("ffprobe"),
+            access_log: None,
             trusted_proxies: vec![
                 "127.0.0.0/8".parse().expect("loopback CIDR"),
                 "::1/128".parse().expect("loopback CIDR"),
@@ -112,13 +124,15 @@ impl HttpConfig {
             .any(|network| network.contains(&peer))
     }
 
-    pub fn public_base(&self, peer: IpAddr, headers: &HeaderMap, uri: &Uri) -> String {
+    /// The scheme clients reached the server with, as forwarded by a trusted
+    /// proxy.
+    pub fn public_scheme(&self, peer: IpAddr, headers: &HeaderMap, uri: &Uri) -> String {
         let trusted = self.trusts(peer);
         let forwarded = trusted
             .then(|| headers.get("forwarded")?.to_str().ok())
             .flatten()
             .and_then(parse_forwarded);
-        let scheme = forwarded
+        forwarded
             .as_ref()
             .and_then(|(proto, _)| proto.as_deref())
             .or_else(|| {
@@ -127,7 +141,17 @@ impl HttpConfig {
                     .flatten()
             })
             .filter(|scheme| matches!(*scheme, "http" | "https"))
-            .unwrap_or_else(|| uri.scheme_str().unwrap_or("http"));
+            .unwrap_or_else(|| uri.scheme_str().unwrap_or("http"))
+            .to_owned()
+    }
+
+    pub fn public_base(&self, peer: IpAddr, headers: &HeaderMap, uri: &Uri) -> String {
+        let trusted = self.trusts(peer);
+        let forwarded = trusted
+            .then(|| headers.get("forwarded")?.to_str().ok())
+            .flatten()
+            .and_then(parse_forwarded);
+        let scheme = self.public_scheme(peer, headers, uri);
         let host = forwarded
             .as_ref()
             .and_then(|(_, host)| host.as_deref())

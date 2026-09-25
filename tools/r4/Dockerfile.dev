@@ -3,6 +3,9 @@
 # them here keeps rustup from downloading them on every fresh container.
 FROM rust:1.90-bookworm
 
+# GStreamer development files let the optional `gstreamer` feature (R7.8) be
+# built and linted natively; the default build does not use them.
+#
 # The production image is built on this arm64 host for both supported Linux
 # targets. Keep the cross toolchain here too, so the native dependencies
 # (aws-lc-sys and bundled SQLite) fail early instead of only during image build.
@@ -10,6 +13,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         gcc-x86-64-linux-gnu \
         libc6-dev-amd64-cross \
+        pkg-config \
+        libgstreamer1.0-dev \
+        libgstreamer-plugins-base1.0-dev \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-libav \
+        gstreamer1.0-plugins-base-apps \
     && rm -rf /var/lib/apt/lists/* \
     && rustup component add rustfmt clippy \
     && rustup target add x86_64-unknown-linux-gnu

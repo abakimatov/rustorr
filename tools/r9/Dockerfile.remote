@@ -1,0 +1,9 @@
+# A stand-in for a server reached over SSH (tools/r9.sh smoke): sshd for the
+# operator's key and a Docker engine of its own, as on a fresh VPS.
+FROM docker:28-dind
+RUN apk add --no-cache openssh-server \
+    && ssh-keygen -A \
+    && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
+    && install -d -m 700 /root/.ssh
+COPY remote-entrypoint.sh /usr/local/bin/remote-entrypoint.sh
+ENTRYPOINT ["remote-entrypoint.sh"]

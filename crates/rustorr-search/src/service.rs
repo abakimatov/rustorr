@@ -9,8 +9,9 @@ pub type SearchFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Where the reference downloads its Rutor database from.
 pub const RUTOR_URL: &str = "http://releases.yourok.ru/torr/rutor.ls";
 const RUTOR_UPDATE_INTERVAL: Duration = Duration::from_secs(3 * 60 * 60);
-/// The reference uses Go's default client, which never times out.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// Bounds each search request as a whole. The reference uses Go's default
+/// client, which never times out.
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The search integrations as the HTTP layer sees them.
 pub trait Search: Send + Sync {
@@ -39,13 +40,12 @@ pub struct SearchService {
 }
 
 impl SearchService {
-    pub fn new(rutor: RutorDatabase) -> Self {
+    /// `client` is the server's shared outbound client; every search request
+    /// adds its own overall timeout.
+    pub fn new(rutor: RutorDatabase, client: reqwest::Client) -> Self {
         Self {
             rutor: Arc::new(rutor),
-            client: reqwest::Client::builder()
-                .timeout(REQUEST_TIMEOUT)
-                .build()
-                .expect("an HTTP client with default TLS builds"),
+            client,
             updater: Mutex::new(None),
         }
     }

@@ -10,8 +10,97 @@ import hashlib
 import json
 import pathlib
 import re
+import xml.etree.ElementTree as ElementTree
 from email.utils import parsedate_to_datetime
 from typing import Any
+
+
+WEBDAV_ETAG = re.compile(r'^"([0-9a-f]{16})([0-9a-f]+)"$')
+
+
+def webdav_etag(value: str) -> str:
+    """x/net/webdav's ETag is hex(mtime in ns) + hex(size). The mtime is the
+    torrent's addition time, which differs between captures; the size stays.
+    Only values whose first 16 digits are a time in 2000-2040 match, so the
+    hex-encoded stream ETags are never touched."""
+    match = WEBDAV_ETAG.match(value)
+    if match and 946684800 * 10**9 <= int(match.group(1), 16) <= 2208988800 * 10**9:
+        return f'"<mtime>{match.group(2)}"'
+    return value
+
+
+def canonical_dav_xml(body: bytes) -> bytes | None:
+    """A WebDAV XML body in a canonical form: the reference writes
+    properties and directory entries in Go map order, which changes between
+    requests. Responses and properties are sorted; dates and ETags derived
+    from torrent addition times and lock tokens are normalized."""
+    if b"DAV:" not in body:
+        return None
+    try:
+        root = ElementTree.fromstring(body)
+    except ElementTree.ParseError:
+        return None
+
+    def canon(element: ElementTree.Element, parent: str) -> list[Any]:
+        text = element.text or ""
+        if element.tag == "{DAV:}getlastmodified":
+            try:
+                if parsedate_to_datetime(text).year >= 2000:
+                    text = "<http-date>"
+            except (TypeError, ValueError):
+                pass
+        elif element.tag == "{DAV:}getetag":
+            text = webdav_etag(text)
+        elif element.tag == "{DAV:}href" and parent == "{DAV:}locktoken":
+            text = "<lock-token>"
+        children = [canon(child, element.tag) for child in element]
+        if element.tag in ("{DAV:}multistatus", "{DAV:}prop"):
+            children.sort(key=lambda child: json.dumps(child, ensure_ascii=False))
+        return [element.tag, sorted(element.attrib.items()), text, children, element.tail or ""]
+
+    declaration = body.split(b"?>", 1)[0] if body.startswith(b"<?xml") else b""
+    return declaration + json.dumps(canon(root, ""), ensure_ascii=False).encode()
+
+
+DIDL_DATE = re.compile(rb"(&lt;dc:date&gt;|<dc:date>)[0-9T:.+Z-]+(&lt;/dc:date&gt;|</dc:date>)")
+
+
+def didl_without_dates(body: bytes) -> bytes:
+    """DLNA Browse results carry `dc:date`, the day of the capture or of the
+    fixture torrents' addition; a cached reference snapshot from another day
+    differs there only. The value is replaced, escaped or not."""
+    return DIDL_DATE.sub(rb"\1<date>\2", body)
+
+
+MP4_CONTAINERS = {b"moov", b"trak", b"mdia"}
+MP4_TIMED = {b"mvhd", b"tkhd", b"mdhd"}
+
+
+def mp4_without_times(body: bytes) -> bytes:
+    """mp4mux stamps mvhd, tkhd and mdhd with the wall-clock time the stream
+    started; the reference's own init segments differ there between runs.
+    Only those creation and modification fields are zeroed."""
+    data = bytearray(body)
+
+    def walk(start: int, end: int) -> None:
+        position = start
+        while position + 8 <= end:
+            size = int.from_bytes(data[position:position + 4], "big")
+            kind = bytes(data[position + 4:position + 8])
+            if size < 8 or position + size > end:
+                return
+            if kind in MP4_CONTAINERS:
+                walk(position + 8, position + size)
+            elif kind in MP4_TIMED and size >= 12:
+                version = data[position + 8]
+                width = 8 if version == 1 else 4
+                fields = position + 12
+                if fields + 2 * width <= position + size:
+                    data[fields:fields + 2 * width] = bytes(2 * width)
+            position += size
+
+    walk(0, len(data))
+    return bytes(data)
 
 
 def normalize_headers(headers: dict[str, str], rules: dict[str, str]) -> dict[str, str]:
@@ -22,6 +111,8 @@ def normalize_headers(headers: dict[str, str], rules: dict[str, str]) -> dict[st
             continue
         if rule == "ignore":
             normalized.pop(key)
+        elif rule == "webdav-etag":
+            normalized[key] = webdav_etag(normalized[key])
         elif rule == "http-date":
             try:
                 parsedate_to_datetime(normalized[key])
@@ -72,22 +163,67 @@ def normalize_json(value: Any, paths: list[str]) -> tuple[Any, bool]:
     return value, changed
 
 
+def normalize_strings(value: Any, patterns: list[dict[str, str]]) -> tuple[Any, bool]:
+    """Rewrites dynamic fragments embedded in JSON strings, such as the peer
+    counts inside MSX status labels."""
+    if isinstance(value, str):
+        text = value
+        for rule in patterns:
+            text = re.sub(rule["pattern"], rule["replacement"], text)
+        return text, text != value
+    if isinstance(value, dict):
+        changed = False
+        for key, item in value.items():
+            value[key], item_changed = normalize_strings(item, patterns)
+            changed = changed or item_changed
+        return value, changed
+    if isinstance(value, list):
+        changed = False
+        for index, item in enumerate(value):
+            value[index], item_changed = normalize_strings(item, patterns)
+            changed = changed or item_changed
+        return value, changed
+    return value, False
+
+
+def key_order(value: Any) -> Any:
+    """The order of object keys, recursively: JSON is compared as decoded
+    values, which ignore it, but Go writes struct fields in declaration order
+    and clients may read the text."""
+    if isinstance(value, dict):
+        return [[key, key_order(item)] for key, item in value.items()]
+    if isinstance(value, list):
+        return [key_order(item) for item in value]
+    return None
+
+
 def comparable(case: dict[str, Any], normalization: dict[str, Any]) -> dict[str, Any]:
     response = case["response"]
     headers = normalize_headers(response.get("headers", {}), normalization.get("headers", {}))
     json_paths = normalization.get("json_paths", [])
     semantic_json, _ = normalize_json(response.get("json"), json_paths)
+    semantic_json, _ = normalize_strings(semantic_json, normalization.get("json_strings", []))
     # JSON is compared structurally. Content-Length is only a derived encoding
     # detail and an optional dynamic field may be present on one side only, so
     # normalize it whenever this manifest declares dynamic JSON paths.
-    if semantic_json is not None and json_paths:
+    if semantic_json is not None and (json_paths or normalization.get("json_strings")):
         headers.pop("content-length", None)
     result = {
         "id": case["id"],
         "status": response["status"],
         "headers": headers,
         "json": semantic_json,
+        "json_key_order": None,
     }
+    if semantic_json is not None and response.get("body_base64"):
+        # The corpus stores decoded JSON with sorted keys; the order comes
+        # from the raw body, with the same dynamic paths removed.
+        try:
+            ordered = json.loads(base64.b64decode(response["body_base64"]))
+        except ValueError:
+            ordered = None
+        ordered, _ = normalize_json(ordered, json_paths)
+        result["json_key_order"] = key_order(ordered)
     if semantic_json is None:
         body = base64.b64decode(response["body_base64"])
         content_type = headers.get("content-type", "")
@@ -96,6 +232,13 @@ def comparable(case: dict[str, Any], normalization: dict[str, Any]) -> dict[str,
             token = boundary.group(1).encode()
             body = body.replace(token, b"<multipart-boundary>")
             headers["content-type"] = content_type.replace(boundary.group(1), "<multipart-boundary>")
+        canonical = canonical_dav_xml(body) if "xml" in content_type else None
+        if canonical is not None:
+            body = canonical
+        if content_type == "video/mp4":
+            body = mp4_without_times(body)
+        if b"dc:date" in body:
+            body = didl_without_dates(body)
         result["body_sha256"] = hashlib.sha256(body).hexdigest()
         result["body_bytes"] = len(body)
     return result

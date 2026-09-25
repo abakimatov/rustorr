@@ -9,7 +9,7 @@ pub(crate) const APPLICATION_ID: i32 = 0x5253_5452;
 /// Migrations in order; the position plus one is the schema version, kept in
 /// `PRAGMA user_version`. Applied migrations are never edited: a change to the
 /// schema is a new entry.
-pub(crate) const MIGRATIONS: &[&str] = &[V1, V2];
+pub(crate) const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 const V1: &str = "
 PRAGMA application_id = 1381192786; -- APPLICATION_ID, in decimal
@@ -54,6 +54,15 @@ CREATE TABLE waf (
 ) STRICT;
 ";
 
+const V3: &str = "
+-- Settings of optional modules that the reference keeps beside the main
+-- settings document, one JSON document per module (R7.8: gstreamer).
+CREATE TABLE module_settings (
+    module   TEXT PRIMARY KEY,
+    document TEXT NOT NULL CHECK (json_valid(document))
+) STRICT;
+";
+
 fn user_version(connection: &Connection) -> Result<u32, Error> {
     connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -62,8 +71,9 @@ fn user_version(connection: &Connection) -> Result<u32, Error> {
 
 /// Brings the database to the latest version, one transaction per migration,
 /// so a failing migration leaves the previous version intact.
-pub(crate) fn migrate(connection: &mut Connection, migrations: &[&str]) -> Result<(), Error> {
-    let latest = migrations.len() as u32;
+/// The schema version of a Rustorr database, without changing it: refuses a
+/// file that is not a Rustorr database and one newer than `latest`.
+pub(crate) fn check(connection: &Connection, latest: u32) -> Result<u32, Error> {
     let found = user_version(connection)?;
 
     if found == 0 {
@@ -91,6 +101,12 @@ pub(crate) fn migrate(connection: &mut Connection, migrations: &[&str]) -> Resul
             supported: latest,
         });
     }
+    Ok(found)
+}
+
+pub(crate) fn migrate(connection: &mut Connection, migrations: &[&str]) -> Result<(), Error> {
+    let latest = migrations.len() as u32;
+    let found = check(connection, latest)?;
 
     for target in found + 1..=latest {
         let transaction = connection

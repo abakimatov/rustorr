@@ -1,0 +1,30 @@
+[package]
+name = "rustorr-gstreamer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# The pipeline runner on gstreamer-rs. It links libgstreamer, so a build with
+# it needs GStreamer at build and at run time; without it the module reports
+# the runtime as unavailable, as MatriX.145 does when it cannot load the
+# libraries.
+runtime = ["dep:gstreamer", "dep:gstreamer-app"]
+
+[dependencies]
+gstreamer = { workspace = true, optional = true }
+gstreamer-app = { workspace = true, optional = true }
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util"] }
+
+[lints]
+workspace = true

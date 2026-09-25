@@ -18,7 +18,7 @@ use axum::{
     },
     middleware::{Next, from_fn, from_fn_with_state, map_response},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use rustorr_lifecycle::{
     AddTorrent, CacheCommand, ClientCore, InfoHash, PlaybackRequest, Settings, SettingsCommand,
@@ -38,10 +38,17 @@ use tracing::{Level, error, info_span};
 use crate::{
     ApiError,
     access::{HttpConfig, WafSnapshot},
+    access_log,
+    discovery::{Discovery, DiscoveryChange, NoDiscovery},
     error::go_json,
+    ffprobe_api,
+    gstreamer_api::{self, GstreamerSetup},
+    listeners::Listeners,
     m3u,
+    msx_api::{self, Msx},
     range::{self, ByteRange, RangeError},
-    search_api, settings_api, web_api,
+    search_api, settings_api, web_api, web_ui,
+    webdav::{self, WebDav},
 };
 
 #[derive(Debug, Clone)]
@@ -49,12 +56,40 @@ pub struct ServerInfo {
     pub version: String,
 }
 
+/// Integrations beside the client core that the HTTP surface exposes.
+#[derive(Clone)]
+pub struct Integrations {
+    pub search: Arc<dyn Search>,
+    pub msx: Arc<Msx>,
+    pub discovery: Arc<dyn Discovery>,
+    /// The GStreamer HLS module; without it `/gst` answers as a build
+    /// without GStreamer.
+    pub gstreamer: Option<GstreamerSetup>,
+}
+
+impl Default for Integrations {
+    /// Nothing wired, as in router tests: no search, no media directory.
+    fn default() -> Self {
+        Self {
+            search: Arc::new(search_api::NoSearch),
+            msx: Arc::new(Msx::detached()),
+            discovery: Arc::new(NoDiscovery),
+            gstreamer: None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct AppState {
-    info: ServerInfo,
+    pub(crate) info: ServerInfo,
     pub(crate) core: Arc<dyn ClientCore>,
-    pub(crate) search: Arc<dyn Search>,
+    pub(crate) integrations: Integrations,
     pub(crate) http: HttpConfig,
+    /// Present when `/dav` is enabled.
+    pub(crate) webdav: Option<Arc<WebDav>>,
+    /// Present when a GStreamer runtime was provided.
+    pub(crate) gstreamer: Option<Arc<rustorr_gstreamer::service::Service>>,
+    pub(crate) metrics: Arc<crate::metrics::HttpMetrics>,
 }
 
 pub fn router(info: ServerInfo) -> Router {
@@ -72,23 +107,34 @@ pub fn router_with_lifecycle(info: ServerInfo, torrents: Arc<TorrentCoordinator>
 }
 
 pub fn router_with_core(info: ServerInfo, core: Arc<dyn ClientCore>, http: HttpConfig) -> Router {
-    router_with_services(info, core, Arc::new(search_api::NoSearch), http)
+    router_with_services(info, core, Integrations::default(), http)
 }
 
 pub fn router_with_services(
     info: ServerInfo,
     core: Arc<dyn ClientCore>,
-    search: Arc<dyn Search>,
+    integrations: Integrations,
     http: HttpConfig,
 ) -> Router {
+    let webdav = http
+        .webdav
+        .then(|| Arc::new(WebDav::new(Arc::clone(&core))));
+    let gstreamer = integrations
+        .gstreamer
+        .as_ref()
+        .map(|setup| gstreamer_api::build_service(setup, Arc::clone(&core), http.port));
     let state = AppState {
         info,
         core,
-        search,
+        integrations,
         http,
+        webdav,
+        gstreamer,
+        metrics: Arc::default(),
     };
     let routes = Router::new()
         .route("/echo", get(echo_state))
+        .route("/metrics", get(crate::metrics::handler))
         .route("/torrents", post(torrents))
         .route("/torrent/upload", post(upload))
         .route("/settings", post(settings))
@@ -96,12 +142,15 @@ pub fn router_with_services(
         .route("/cache", post(cache))
         .route("/waf", get(get_waf).post(set_waf))
         .route("/stream", get(stream_root).head(stream_root))
+        // gin's `/stream/*fname` also matches `/stream/`, which GStreamer's
+        // source URL uses; an axum wildcard needs a character after the slash.
+        .route("/stream/", get(stream_root).head(stream_root))
         .route("/stream/{*fname}", get(stream_named).head(stream_named))
         .route("/play/{hash}/{id}", get(play).head(play))
         .route("/playlist", get(playlist_root))
+        .route("/playlist/", get(playlist_root))
         .route("/playlist/{*fname}", get(playlist_named))
         .route("/playlistall/all.m3u", get(playlist_all))
-        .route("/", get(web_api::root))
         .route("/magnets", get(web_api::magnets))
         .route("/stat", get(web_api::stat))
         .route(
@@ -121,16 +170,50 @@ pub fn router_with_services(
         .route("/download/{size}", get(web_api::download))
         .route("/shutdown", get(web_api::shutdown))
         .route("/shutdown/{*reason}", get(web_api::shutdown))
+        .route("/msx", get(msx_api::landing_redirect))
+        .route("/msx/", get(msx_api::landing))
+        .route(
+            "/msx/start.json",
+            get(msx_api::start).post(msx_api::set_start),
+        )
+        .route("/msx/trn", get(msx_api::saved).post(msx_api::status))
+        .route("/msx/proxy", any(msx_api::proxy))
+        .route("/msx/imdb/{id}", get(msx_api::imdb))
+        .route(
+            "/files",
+            get(msx_api::media_link).post(msx_api::set_media_link),
+        )
+        .route("/files/", get(msx_api::files).head(msx_api::files))
+        .route("/files/{*path}", get(msx_api::files).head(msx_api::files))
+        .route(
+            "/gst/settings",
+            get(gstreamer_api::get_settings).post(gstreamer_api::set_settings),
+        )
+        .route("/ffp/status", get(ffprobe_api::status))
+        .route("/ffp/{hash}/{id}", get(ffprobe_api::probe))
+        .route("/dav", any(webdav::handle))
+        .route("/dav/", any(webdav::handle))
+        .route("/dav/{*path}", any(webdav::handle))
         .fallback(not_found)
-        .method_not_allowed_fallback(not_found)
+        .method_not_allowed_fallback(not_found);
+    let routes = web_ui::routes(routes);
+    let routes = if state.gstreamer.is_some() {
+        gstreamer_api::routes(routes)
+    } else {
+        routes
+    };
+    let routes = routes
         .with_state(state.clone())
         .layer(from_fn(head_only_where_routed))
         .layer(CatchPanicLayer::custom(panicked));
     Router::new()
         .fallback_service(routes)
         .layer(from_fn(cors))
-        .layer(from_fn_with_state(state, waf))
+        .layer(from_fn_with_state(state.clone(), waf))
         .layer(map_response(without_allow_on_404))
+        // gin's first middleware: every request is logged, blocked or not.
+        .layer(from_fn_with_state(state.clone(), access_log::middleware))
+        .layer(from_fn_with_state(state, crate::metrics::middleware))
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<Body>| {
@@ -168,20 +251,19 @@ pub async fn serve_with_lifecycle(
 }
 
 pub async fn serve_with_services(
-    listener: tokio::net::TcpListener,
+    listener: Listeners,
     info: ServerInfo,
     core: Arc<dyn ClientCore>,
-    search: Arc<dyn Search>,
+    integrations: Integrations,
     http: HttpConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    axum::serve(
-        listener,
-        router_with_services(info, core, search, http)
-            .into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown)
-    .await
+    listener
+        .serve(
+            router_with_services(info, core, integrations, http),
+            shutdown,
+        )
+        .await
 }
 
 pub async fn serve_with_core(
@@ -235,7 +317,7 @@ async fn echo_state(State(state): State<AppState>) -> String {
     state.info.version
 }
 
-fn peer(request: &Request<Body>) -> IpAddr {
+pub(crate) fn peer(request: &Request<Body>) -> IpAddr {
     request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -434,12 +516,43 @@ async fn torrents(
             return Err(json_bad_request(format!("unknown action: \"{other}\"")).into_response());
         }
     };
-    match state
+    let changes_catalog = matches!(
+        command,
+        TorrentCommand::Add(_) | TorrentCommand::Remove(_) | TorrentCommand::Wipe
+    );
+    // The reference drops the torrent's HLS task with it.
+    let removed_tasks: Vec<String> = match &command {
+        TorrentCommand::Remove(hash) | TorrentCommand::Drop(hash) => vec![hash.to_string()],
+        TorrentCommand::Wipe if state.gstreamer.is_some() => {
+            match state.core.torrents(TorrentCommand::List).await {
+                Ok(TorrentReply::List(torrents)) => torrents
+                    .iter()
+                    .filter_map(|torrent| torrent.hash.clone())
+                    .collect(),
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    };
+    let reply = state
         .core
         .torrents(command)
         .await
-        .map_err(|error| lifecycle(error).into_response())?
+        .map_err(|error| lifecycle(error).into_response())?;
+    for hash in &removed_tasks {
+        gstreamer_api::remove_task(&state, hash);
+    }
+    // MatriX.145 restarts its DLNA server after these, when it is enabled.
+    if changes_catalog
+        && state
+            .core
+            .settings(SettingsCommand::Get)
+            .await
+            .is_ok_and(|settings| settings.enable_dlna)
     {
+        state.integrations.discovery.catalog_changed().await;
+    }
+    match reply {
         TorrentReply::Torrent(Some(torrent)) => {
             json_response(torrent).map_err(IntoResponse::into_response)
         }
@@ -538,6 +651,7 @@ async fn settings(
     let request: SettingsAction = json_body(request)
         .await
         .map_err(IntoResponse::into_response)?;
+    let requested = request.sets.clone();
     let command = match request.action.as_str() {
         "get" => SettingsCommand::Get,
         "set" => SettingsCommand::Set(Box::new(
@@ -553,10 +667,23 @@ async fn settings(
         .settings(command)
         .await
         .map_err(|error| lifecycle(error).into_response())?;
-    // MatriX.145 restarts Rutor search on every change, following the
-    // settings it now has.
+    // MatriX.145 restarts DLNA and Bonjour, then Rutor search, on every
+    // change.
+    let change = match (request.action.as_str(), requested) {
+        ("set", Some(requested)) => Some(DiscoveryChange::Set {
+            dlna: requested.enable_dlna,
+            bonjour: requested.enable_bonjour,
+            settings: Box::new(settings.clone()),
+        }),
+        ("def", _) => Some(DiscoveryChange::Defaults),
+        _ => None,
+    };
+    if let Some(change) = change {
+        state.integrations.discovery.settings_changed(change).await;
+    }
     if request.action != "get" {
         state
+            .integrations
             .search
             .set_rutor_enabled(settings.enable_rutor_search)
             .await;
@@ -708,8 +835,17 @@ async fn cache(
         .hash
         .parse()
         .map_err(|_| json_bad_request("invalid info hash").into_response())?;
-    let cache = state
-        .core
+    let view = cache_view(state.core.as_ref(), hash).await?;
+    json_response(view).map_err(IntoResponse::into_response)
+}
+
+/// The cache state `/cache` and `/gst/:hash/heartbeat` report: `404` when the
+/// torrent is not loaded.
+pub(crate) async fn cache_view(
+    core: &dyn ClientCore,
+    hash: InfoHash,
+) -> Result<impl Serialize + use<>, Response<Body>> {
+    let cache = core
         .cache(CacheCommand::Get(hash))
         .await
         .map_err(|_| StatusCode::NOT_FOUND.into_response())?;
@@ -717,8 +853,7 @@ async fn cache(
         .snapshots
         .first()
         .ok_or_else(|| StatusCode::NOT_FOUND.into_response())?;
-    let torrent = match state
-        .core
+    let torrent = match core
         .torrents(TorrentCommand::Get(hash))
         .await
         .map_err(|error| lifecycle(error).into_response())?
@@ -761,7 +896,7 @@ async fn cache(
             })
             .collect()
     };
-    json_response(CacheResponse {
+    Ok(CacheResponse {
         hash: hash.to_string(),
         capacity: cache.capacity,
         filled: if snapshot.demanded_bytes == 0 {
@@ -785,7 +920,6 @@ async fn cache(
             })
             .collect(),
     })
-    .map_err(IntoResponse::into_response)
 }
 
 #[derive(Debug, Deserialize)]
@@ -968,7 +1102,16 @@ async fn stream_impl(
         drop(playback);
     }
     if query.contains_key("stat") {
-        return json_response(torrent).map_err(IntoResponse::into_response);
+        // `tor.Status()` after the add: an already running torrent reports
+        // its current state, not the add's snapshot.
+        let current = match torrent.hash() {
+            Some(hash) => match state.core.torrents(TorrentCommand::Get(hash)).await {
+                Ok(TorrentReply::Torrent(Some(current))) => *current,
+                _ => torrent,
+            },
+            None => torrent,
+        };
+        return json_response(current).map_err(IntoResponse::into_response);
     }
     if playlist {
         let base = state
@@ -1015,7 +1158,7 @@ async fn shareable_link_exists(state: &AppState, link: &str) -> bool {
 
 async fn play(
     State(state): State<AppState>,
-    Path((hash, id)): Path<(String, u32)>,
+    Path((hash, id)): Path<(String, String)>,
     request: Request<Body>,
 ) -> Result<Response<Body>, Response<Body>> {
     let hash: InfoHash = hash
@@ -1039,7 +1182,26 @@ async fn play(
         Ok(TorrentReply::Torrent(Some(torrent))) => *torrent,
         _ => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
     };
-    raw_playback(state.core, state.http.max_stream_size, torrent, id, request).await
+    // A single-file torrent plays its file whatever the index says; otherwise
+    // the index must be a number (`strconv.Atoi`).
+    let index = if torrent.file_stats.len() == 1 {
+        torrent.file_stats[0].id
+    } else {
+        match id.parse::<i64>() {
+            Ok(-1) | Err(_) => {
+                return Err(ApiError::Status(StatusCode::BAD_REQUEST).into_response());
+            }
+            Ok(index) => u32::try_from(index).unwrap_or(u32::MAX),
+        }
+    };
+    raw_playback(
+        state.core,
+        state.http.max_stream_size,
+        torrent,
+        index,
+        request,
+    )
+    .await
 }
 
 async fn raw_playback(
@@ -1067,9 +1229,9 @@ async fn raw_playback(
         ));
     }
     let etag = file_etag(hash, &file.path);
-    let mime = mime_guess::from_path(&file.path)
-        .first_or_octet_stream()
-        .to_string();
+    // Go's type table with TorrServer's extensions, as ServeContent uses it.
+    let mime = crate::media_type::by_extension(&file.path)
+        .unwrap_or_else(|| "application/octet-stream".into());
     if precondition_failed(request.headers(), &etag, torrent.timestamp) {
         let mut response = StatusCode::PRECONDITION_FAILED.into_response();
         playback_headers(
@@ -1577,6 +1739,7 @@ fn head_routed(path: &str) -> bool {
         || under("/dav")
         || under("/mcp")
         || path == "/msx/proxy"
+        || path.starts_with("/files/")
 }
 
 async fn not_found() -> ApiError {
@@ -1633,6 +1796,23 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn playback_app() -> (Router, Arc<InMemoryClientCore>, InfoHash) {
+        let (core, hash) = playback_core();
+        let client: Arc<dyn ClientCore> = core.clone();
+        (
+            router_with_core(
+                ServerInfo {
+                    version: "MatriX.145".into(),
+                },
+                client,
+                HttpConfig::default(),
+            ),
+            core,
+            hash,
+        )
+    }
+
+    /// One working torrent with a ten-byte `video.mp4`.
+    pub(crate) fn playback_core() -> (Arc<InMemoryClientCore>, InfoHash) {
         let hash: InfoHash = "0101010101010101010101010101010101010101".parse().unwrap();
         let core = Arc::new(InMemoryClientCore::new());
         core.insert(
@@ -1666,18 +1846,26 @@ pub(crate) mod tests {
             HashMap::from([(1, (0..10).collect())]),
         )
         .unwrap();
-        let client: Arc<dyn ClientCore> = core.clone();
-        (
-            router_with_core(
-                ServerInfo {
-                    version: "MatriX.145".into(),
-                },
-                client,
-                HttpConfig::default(),
-            ),
-            core,
-            hash,
-        )
+        (core, hash)
+    }
+
+    #[tokio::test]
+    async fn a_single_file_torrent_plays_whatever_index_is_asked() {
+        let (app, _, hash) = playback_app();
+        for index in ["1", "9", "x"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/play/{hash}/{index}"))
+                        .header(header::RANGE, "bytes=0-1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT, "{index}");
+        }
     }
 
     #[tokio::test]

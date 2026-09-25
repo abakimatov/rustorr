@@ -9,11 +9,13 @@ R6_PROXY_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r6-proxy.yml"
 AUTH_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r6-auth.yml"
 R7_REFERENCE_COMPOSE="${COMPOSE} -f ${ROOT}/docker-compose.r7-capability.yml"
 R7_CANDIDATE_COMPOSE="${R6_COMPOSE} -f ${ROOT}/docker-compose.r7-capability.yml -f ${ROOT}/docker-compose.r7-candidate.yml"
+R7_GST_REFERENCE_COMPOSE="${R7_REFERENCE_COMPOSE} -f ${ROOT}/docker-compose.r7-gst.yml"
+R7_GST_CANDIDATE_COMPOSE="${R7_CANDIDATE_COMPOSE} -f ${ROOT}/docker-compose.r7-gst-candidate.yml"
 RUN_ROOT=${RUSTORR_CONTRACT_RUN_ROOT:-/tmp/rustorr-contract}
 MANIFEST=${ROOT}/tools/contract/scenarios.json
 ALLOWLIST=${ROOT}/tools/contract/deferred-routes.json
 
-usage() { printf '%s\n' "usage: $0 {doctor|config|up|candidate-up|candidate-down|auth-reference-up|auth-candidate-up|proxy-up|candidate-proxy-up|proxy-down|candidate-proxy-down|tls-up|tls-down|reset-seeder|restart-matrix|capture|diff|down}"; }
+usage() { printf '%s\n' "usage: $0 {doctor|config|up|fuse-probe|candidate-up|candidate-down|auth-reference-up|auth-candidate-up|proxy-up|candidate-proxy-up|proxy-down|candidate-proxy-down|tls-up|tls-down|reset-seeder|restart-matrix|capture|compare|diff|down}"; }
 doctor() { command -v docker >/dev/null 2>&1 || { echo "error: docker CLI is not installed" >&2; return 1; }; docker compose version >/dev/null 2>&1 || { echo "error: docker compose is unavailable" >&2; return 1; }; docker info >/dev/null 2>&1 || { echo "error: Docker daemon is unavailable" >&2; return 1; }; }
 config() { ${COMPOSE} config; }
 up() { doctor; ${COMPOSE} up -d --force-recreate tracker seeder torrserver; }
@@ -73,6 +75,50 @@ tls_up() {
 tls_down() { doctor; ${PROXY_COMPOSE} rm -sf r2tls; }
 proxy_down() { doctor; ${PROXY_COMPOSE} rm -sf r2proxy; }
 candidate_proxy_down() { doctor; ${R6_PROXY_COMPOSE} rm -sf r6proxy; }
+# FUSE is not HTTP: mount it in the target, load the media fixture over the
+# API and record what a local program sees (tools/contract/r7/fuse_probe.sh).
+fuse_probe() {
+  doctor
+  target=${1:?fuse-probe target is required: reference or candidate}
+  run_id=${RUSTORR_CONTRACT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
+  output_dir=${RUN_ROOT}/${run_id}
+  mkdir -p "${output_dir}"
+  reset_seeder
+  if [ "${target}" = reference ]; then
+    compose="${R7_REFERENCE_COMPOSE} -f ${ROOT}/docker-compose.r7-fuse.yml"
+    service=torrserver
+    ${R7_CANDIDATE_COMPOSE} stop rustorr
+  else
+    compose="${R7_CANDIDATE_COMPOSE} -f ${ROOT}/docker-compose.r7-fuse-candidate.yml"
+    service=rustorr
+    ${R7_REFERENCE_COMPOSE} stop torrserver
+  fi
+  ${compose} up -d --force-recreate "${service}"
+  docker run --rm --network rustorr-r1_baseline rustorr-r1-fixture python3 -c "
+import json, time, urllib.request
+base = 'http://${service}:8090'
+for _ in range(60):
+    try:
+        urllib.request.urlopen(base + '/echo', timeout=5).read(); break
+    except Exception:
+        time.sleep(1)
+def call(body):
+    request = urllib.request.Request(base + '/torrents', data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'})
+    return urllib.request.urlopen(request, timeout=60).read()
+call({'action': 'add', 'link': 'file:///fixtures/torrents/unicode.torrent', 'save_to_db': True})
+for _ in range(120):
+    listed = json.loads(call({'action': 'list'}))
+    if listed and listed[0].get('stat') == 3:
+        break
+    time.sleep(1)
+else:
+    raise SystemExit('the media fixture never got its metadata')
+"
+  container=$(${compose} ps -q "${service}")
+  docker exec -i "${container}" sh -s /mnt/torrserver < "${ROOT}/tools/contract/r7/fuse_probe.sh" \
+    | python3 "${ROOT}/tools/contract/r7/fuse_normalize.py" > "${output_dir}/${target}-fuse.txt"
+  printf '%s\n' "${output_dir}/${target}-fuse.txt"
+}
 down() { doctor; ${COMPOSE} down; }
 capture() {
   target=${1:?capture target is required: reference or candidate}
@@ -90,6 +136,7 @@ capture() {
   case "${profile}" in
     auth) reference_compose=${AUTH_COMPOSE}; candidate_compose=${AUTH_COMPOSE} ;;
     r7) reference_compose=${R7_REFERENCE_COMPOSE}; candidate_compose=${R7_CANDIDATE_COMPOSE} ;;
+    r7-gst) reference_compose=${R7_GST_REFERENCE_COMPOSE}; candidate_compose=${R7_GST_CANDIDATE_COMPOSE} ;;
     *) reference_compose=${COMPOSE}; candidate_compose=${R6_COMPOSE} ;;
   esac
   case "${target}:${profile}" in
@@ -107,20 +154,55 @@ capture() {
   run_id=${RUSTORR_CONTRACT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
   output_dir=${RUN_ROOT}/${run_id}
   mkdir -p "${output_dir}"
+  torrent_file=$(host_fixtures)
+  # The pinned reference does not change between runs: a valid corpus is
+  # reused while its key (tools/contract/reference_cache.py) stays the same.
+  # RUSTORR_REFERENCE_CACHE=refresh recaptures and replaces it, =off bypasses
+  # the cache entirely.
+  cache_mode=${RUSTORR_REFERENCE_CACHE:-on}
+  cache_dir=${RUSTORR_REFERENCE_CACHE_DIR:-${RUN_ROOT}/reference-cache}
+  case "${profile}" in proxy) cache_compose=${PROXY_COMPOSE} ;; *) cache_compose=${reference_compose} ;; esac
+  if [ "${target}" = reference ] && [ "${cache_mode}" != off ]; then
+    # The key is taken before the capture: files edited while it runs must
+    # not relabel the corpus.
+    cache_key=$(reference_cache_describe "$@")
+  fi
+  if [ "${target}" = reference ] && [ "${cache_mode}" = on ]; then
+    if [ -s "${cache_dir}/${cache_key}.json" ]; then
+      cp "${cache_dir}/${cache_key}.json" "${output_dir}/${target}.json"
+      echo "reference cache: hit ${cache_key}" >&2
+      printf '%s\n' "${output_dir}/${target}.json"
+      return 0
+    fi
+    echo "reference cache: miss ${cache_key}" >&2
+  fi
+  if [ "${profile}" = r7 ] || [ "${profile}" = r7-gst ]; then
+    # Both targets announce the same Bonjour and DLNA names on the discovery
+    # network; only the target under test may be running.
+    if [ "${target}" = reference ]; then
+      ${candidate_compose} stop rustorr
+    else
+      ${reference_compose} stop torrserver
+    fi
+  fi
   if [ "${RUSTORR_RESET_SEEDER:-1}" = 1 ]; then
     reset_seeder
     if [ "${target}" = reference ]; then
       ${reference_compose} up -d --force-recreate torrserver
     else
+      # Only Rustorr is rebuilt: `up --build` would rebuild the fixture
+      # images too, and their new IDs would needlessly change the key of
+      # the cached reference corpus.
+      ${candidate_compose} build rustorr
       ${candidate_compose} up -d --force-recreate rustorr
     fi
     # Both servers bind before their torrent runtime is fully settled. Give
     # that runtime a bounded quiet interval before the isolated corpus starts.
     sleep 2
   fi
-  if [ "${profile}" = r7 ]; then
+  if [ "${profile}" = r7 ] || [ "${profile}" = r7-gst ]; then
     # The fake Torznab indexer answers both targets from the fixture network.
-    ${reference_compose} up -d indexer
+    ${reference_compose} up -d --force-recreate indexer
   fi
   if [ "${profile}" = proxy ]; then
     if [ "${target}" = reference ]; then
@@ -132,7 +214,6 @@ capture() {
     fi
     set -- "$@" --insecure
   fi
-  torrent_file=$(host_fixtures)
   docker run --rm --network rustorr-r1_baseline \
     -v "${ROOT}:/workspace:ro" \
     -v "${RUN_ROOT}:${RUN_ROOT}" \
@@ -142,6 +223,24 @@ capture() {
     python3 tools/contract/run.py --base-url "${base_url}" \
       --manifest tools/contract/scenarios.json --torrent-file "${torrent_file}" \
       --output "${output_dir}/${target}.json" "$@"
+  if [ "${target}" = reference ] && [ "${cache_mode}" != off ]; then
+    python3 "${ROOT}/tools/contract/reference_cache.py" store --cache-dir "${cache_dir}" \
+      --describe "${output_dir}/${target}.cache-key.json" "${output_dir}/${target}.json"
+  fi
+}
+reference_cache_describe() {
+  ${cache_compose} config --format json | python3 "${ROOT}/tools/contract/reference_cache.py" key \
+    --root "${ROOT}" --base-url "${base_url}" --reset-seeder "${RUSTORR_RESET_SEEDER:-1}" \
+    --torrent-file "${torrent_file}" --describe "${output_dir}/${target}.cache-key.json" -- "$@"
+}
+# Reference (from the cache when possible), candidate and diff in one run.
+compare() {
+  run_id=${1:?compare needs a run id}
+  shift
+  output_dir=${RUN_ROOT}/${run_id}
+  RUSTORR_CONTRACT_RUN_ID=${run_id} capture reference "$@"
+  RUSTORR_CONTRACT_RUN_ID=${run_id} capture candidate "$@"
+  diff_corpus "${output_dir}/reference.json" "${output_dir}/candidate.json" "${output_dir}/diff.json"
 }
 restart_matrix() {
   target=${1:?restart-matrix target is required: reference or candidate}
@@ -168,5 +267,5 @@ diff_corpus() { reference=${1:?reference corpus is required}; candidate=${2:?can
 
 command=${1:-}; shift || true
 case "${command}" in
-  doctor) doctor ;; config) config ;; up) up ;; candidate-up) candidate_up ;; candidate-down) candidate_down ;; auth-reference-up) auth_reference_up ;; auth-candidate-up) auth_candidate_up ;; proxy-up) proxy_up ;; candidate-proxy-up) candidate_proxy_up ;; proxy-down) proxy_down ;; candidate-proxy-down) candidate_proxy_down ;; tls-up) tls_up ;; tls-down) tls_down ;; reset-seeder) reset_seeder ;; restart-matrix) restart_matrix "$@" ;; capture) capture "$@" ;; diff) diff_corpus "$@" ;; down) down ;; *) usage >&2; exit 2 ;;
+  doctor) doctor ;; config) config ;; up) up ;; candidate-up) candidate_up ;; candidate-down) candidate_down ;; auth-reference-up) auth_reference_up ;; auth-candidate-up) auth_candidate_up ;; proxy-up) proxy_up ;; candidate-proxy-up) candidate_proxy_up ;; proxy-down) proxy_down ;; candidate-proxy-down) candidate_proxy_down ;; tls-up) tls_up ;; tls-down) tls_down ;; reset-seeder) reset_seeder ;; restart-matrix) restart_matrix "$@" ;; fuse-probe) fuse_probe "$@" ;; capture) capture "$@" ;; compare) compare "$@" ;; diff) diff_corpus "$@" ;; down) down ;; *) usage >&2; exit 2 ;;
 esac

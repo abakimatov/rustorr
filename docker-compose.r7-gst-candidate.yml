@@ -1,0 +1,17 @@
+# Rustorr with the `gstreamer` feature and the GStreamer runtime the
+# reference's gst image has, plus gst-discoverer-1.0. It layers over
+# docker-compose.r7-candidate.yml.
+services:
+  rustorr:
+    image: rustorr-r7-rustorr-gst
+    build:
+      args:
+        RUSTORR_FEATURES: gstreamer
+        RUSTORR_BUILD_PACKAGES: libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+        RUSTORR_RUNTIME_PACKAGES: >-
+          ffmpeg libgstreamer1.0-0 gstreamer1.0-tools gstreamer1.0-plugins-base
+          gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+          gstreamer1.0-libav gstreamer1.0-plugins-base-apps
+    environment:
+      # The image's user has no home for GStreamer's registry cache.
+      GST_REGISTRY: /tmp/rustorr-gstreamer-registry.bin

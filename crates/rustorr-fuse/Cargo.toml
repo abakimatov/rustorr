@@ -1,0 +1,18 @@
+[package]
+name = "rustorr-fuse"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustorr-lifecycle.workspace = true
+rustorr-vfs.workspace = true
+fuser = { version = "0.18", default-features = false }
+libc = "0.2"
+nix = { workspace = true, features = ["mount", "user"] }
+tokio = { workspace = true, features = ["rt", "io-util"] }
+tracing.workspace = true
+
+[lints]
+workspace = true

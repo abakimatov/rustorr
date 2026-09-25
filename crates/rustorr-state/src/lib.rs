@@ -9,6 +9,7 @@ mod catalog;
 mod error;
 mod schema;
 mod settings;
+mod snapshot;
 mod state;
 mod values;
 mod viewed;
@@ -16,6 +17,7 @@ mod waf;
 
 pub use catalog::CatalogEntry;
 pub use error::Error;
+pub use snapshot::{SCHEMA_VERSION, inspect, snapshot};
 pub use state::State;
 pub use viewed::ViewedEntry;
 pub use waf::WafLists;

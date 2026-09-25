@@ -10,6 +10,20 @@ services:
     networks: [baseline]
 
   rustorr:
+    # The capability variant: ffprobe for /ffp, as in the reference image.
+    image: rustorr-r7-rustorr
+    build:
+      args:
+        RUSTORR_RUNTIME_PACKAGES: ffmpeg
     depends_on:
       rutor-seed:
         condition: service_completed_successfully
+    volumes:
+      - ./tools/contract/r7/msx-media:/srv/msx-media:ro
+    hostname: discovery-target
+    environment:
+      # The reference runs with --webdav.
+      RUSTORR_WEBDAV: "true"
+    networks:
+      discovery:
+        ipv4_address: 172.31.252.20

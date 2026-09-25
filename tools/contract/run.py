@@ -16,6 +16,7 @@ import ssl
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any
@@ -85,6 +86,25 @@ def multipart_body(spec: dict[str, Any]) -> tuple[bytes, str]:
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def open_url(
+    req: urllib.request.Request,
+    timeout: float,
+    context: ssl.SSLContext | None,
+    follow: bool,
+) -> Any:
+    """urllib follows redirects on its own; a step observing the redirect
+    itself sets ``"follow_redirects": false`` and gets it as an HTTPError."""
+    if follow:
+        return urllib.request.urlopen(req, timeout=timeout, context=context)
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=context))
+    return opener.open(req, timeout=timeout)
+
+
 def request(
     base_url: str,
     scenario: dict[str, Any],
@@ -118,7 +138,7 @@ def request(
     payload = b""
     error: str | None = None
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=context) as response:
+        with open_url(req, timeout, context, follow=resolved.get("follow_redirects", True)) as response:
             status = response.status
             response_headers = dict(response.headers.items())
             payload = response.read()
@@ -152,6 +172,11 @@ def request(
         },
         "latency_ms": round(elapsed, 3),
     }
+    if error and resolved.get("expect_connection_refused") and "Connection refused" in error:
+        # A closed port is the observation, e.g. the DLNA server after it
+        # was switched off. Status 0 stands for "nothing listens".
+        result["response"]["status"] = 0
+        error = None
     if error:
         result["error"] = error
     try:
@@ -589,7 +614,7 @@ def main() -> None:
     parser.add_argument("--torrent-hash")
     parser.add_argument("--torrent-file", type=pathlib.Path)
     parser.add_argument("--basic-auth", help="user:password for setup and scenarios marked auth")
-    parser.add_argument("--profile", choices=("direct", "auth", "proxy", "r7"), default="direct")
+    parser.add_argument("--profile", choices=("direct", "auth", "proxy", "r7", "r7-gst"), default="direct")
     parser.add_argument("--only", help="comma-separated scenario IDs to capture")
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--readiness-timeout", type=float, default=90)
@@ -609,6 +634,9 @@ def main() -> None:
         variables["torrent_file"] = str(args.torrent_file.resolve())
     if args.basic_auth:
         variables["basic_auth"] = args.basic_auth
+    # Discovery probes run in the fixture service and keep only what the
+    # target under test sent.
+    variables["target_host"] = urllib.parse.urlsplit(args.base_url).hostname or ""
     context = ssl._create_unverified_context() if args.insecure else None
     selected = set(args.only.split(",")) if args.only else None
     scenarios = [

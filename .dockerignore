@@ -5,3 +5,5 @@ target
 **/target
 tools/engine-spike
 docs
+web/node_modules
+web/dist

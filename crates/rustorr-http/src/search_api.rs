@@ -107,7 +107,7 @@ pub(crate) async fn rutor(
     if !current_settings(&state).await?.enable_rutor_search {
         return Err(disabled());
     }
-    let found = state.search.rutor(&search_query(&request));
+    let found = state.integrations.search.rutor(&search_query(&request));
     json_response(found).map_err(IntoResponse::into_response)
 }
 
@@ -138,6 +138,7 @@ pub(crate) async fn torznab(
         })
         .collect();
     let found = state
+        .integrations
         .search
         .torznab(&indexers, &search_query(&request), index)
         .await;
@@ -163,7 +164,12 @@ pub(crate) async fn torznab_test(
     let request: TestRequest = json_body(request)
         .await
         .map_err(|_| ApiError::Status(StatusCode::BAD_REQUEST).into_response())?;
-    let body = match state.search.torznab_test(&request.host, &request.key).await {
+    let body = match state
+        .integrations
+        .search
+        .torznab_test(&request.host, &request.key)
+        .await
+    {
         Ok(()) => json!({"success": true}),
         Err(error) => json!({"error": error, "success": false}),
     };

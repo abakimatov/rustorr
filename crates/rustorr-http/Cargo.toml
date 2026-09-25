@@ -8,11 +8,15 @@ publish.workspace = true
 [dependencies]
 rustorr-lifecycle.workspace = true
 rustorr-search.workspace = true
+rustorr-vfs.workspace = true
+rustorr-gstreamer.workspace = true
 axum.workspace = true
 serde_json.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
 serde.workspace = true
 tower-http.workspace = true
-tokio = { workspace = true, features = ["io-util", "net", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "process", "sync", "time"] }
 tokio-util.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -24,6 +28,9 @@ httpdate.workspace = true
 ipnet.workspace = true
 mime_guess.workspace = true
 percent-encoding.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+quick-xml.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "io-util", "sync", "time"] }

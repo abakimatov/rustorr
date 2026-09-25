@@ -1,0 +1,80 @@
+@import "tailwindcss";
+@import "./fonts.css";
+
+/* Design tokens: cool graphite neutrals and one indigo accent, light by
+   default, dark by the system setting or an explicit choice (`data-theme`). */
+@theme {
+  --font-display: "Onest Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+}
+
+:root {
+  --ground: #f4f5f8;
+  --surface: #ffffff;
+  --raised: #ebedf2;
+  --line: #dde1e8;
+  --ink: #161a22;
+  --muted: #5c6372;
+  --accent: #4f46e5;
+  --on-accent: #ffffff;
+  --accent-soft: #ececfd;
+  --ok: #2f7f6d;
+  --warn: #8a6412;
+  --danger: #b4233a;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0f1115;
+    --surface: #181b21;
+    --raised: #14171c;
+    --line: #2a2f38;
+    --ink: #e9ecf2;
+    --muted: #8c93a1;
+    --accent: #8b8cf8;
+    --on-accent: #0f1033;
+    --accent-soft: #242747;
+    --ok: #4fb8a3;
+    --warn: #e3b341;
+    --danger: #f29aa3;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #0f1115;
+  --surface: #181b21;
+  --raised: #14171c;
+  --line: #2a2f38;
+  --ink: #e9ecf2;
+  --muted: #8c93a1;
+  --accent: #8b8cf8;
+  --on-accent: #0f1033;
+  --accent-soft: #242747;
+  --ok: #4fb8a3;
+  --warn: #e3b341;
+  --danger: #f29aa3;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}

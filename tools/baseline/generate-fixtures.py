@@ -5,11 +5,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import struct
 import pathlib
 import shutil
 import sys
 from typing import Any
 
+from fixture_media import matroska
 from fixture_payload import SEED, payload
 
 TRACKER = b"http://tracker:6969/announce"
@@ -31,8 +34,27 @@ def bencode(value: Any) -> bytes:
     raise TypeError(type(value).__name__)
 
 
-def write_file(path: pathlib.Path, size: int) -> str:
+def wav(size: int) -> bytes:
+    """A deterministic 16-bit mono 8 kHz sine: real media that ffprobe (and
+    later GStreamer) can read, unlike the pseudo-random payloads."""
+    rate = 8000
+    frames = (size - 44) // 2
+    samples = b"".join(
+        struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * index / rate))) for index in range(frames)
+    )
+    header = b"RIFF" + struct.pack("<I", 36 + len(samples)) + b"WAVEfmt " + struct.pack(
+        "<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16
+    ) + b"data" + struct.pack("<I", len(samples))
+    return header + samples
+
+
+def write_file(path: pathlib.Path, size: int, content: str = "payload") -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if content in ("wav", "mkv"):
+        data = wav(size) if content == "wav" else matroska()
+        assert len(data) == size
+        path.write_bytes(data)
+        return hashlib.sha256(data).hexdigest()
     digest = hashlib.sha256()
     with path.open("wb") as stream:
         remaining = size
@@ -98,6 +120,11 @@ def main(destination: str) -> None:
             "disk_prefix": "Медиа коллекция",
             "files": [("01 Пример/Фильм.mkv", 512 * 1024), ("02 Пример/Фильм.srt", 32 * 1024), ("02 Пример/Фильм.ac3", 64 * 1024)],
         },
+        # Two seconds of a real WAV for media inspection (R7.7).
+        "clip": {"name": "clip.wav", "files": [("clip.wav", 44 + 2 * 16000)], "content": "wav"},
+        # Eight seconds of H.264, PCM audio and UTF-8 subtitles in Matroska
+        # with Cues, for the GStreamer HLS module (R7.8).
+        "movie": {"name": "movie.mkv", "files": [("movie.mkv", len(matroska()))], "content": "mkv"},
     }
     manifest = {"piece_length": PIECE_LENGTH, "seed": SEED.decode(), "torrents": {}}
     torrent_lines = []
@@ -106,7 +133,9 @@ def main(destination: str) -> None:
         files = definition["files"]
         disk_prefix = definition.get("disk_prefix", "")
         hashes = {
-            str(pathlib.Path(disk_prefix) / relative): write_file(files_root / disk_prefix / relative, size)
+            str(pathlib.Path(disk_prefix) / relative): write_file(
+                files_root / disk_prefix / relative, size, definition.get("content", "payload")
+            )
             for relative, size in files
         }
         metadata, info_hash = torrent(definition["name"], files, files_root, disk_prefix)

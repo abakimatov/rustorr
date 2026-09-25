@@ -12,7 +12,7 @@ use std::{
 
 use tracing::{info, warn};
 
-use crate::TorrentDetails;
+use crate::{TorrentDetails, service::REQUEST_TIMEOUT};
 
 /// A local copy younger than this is not downloaded again (2 h 55 min).
 const FRESH_FOR: Duration = Duration::from_secs(175 * 60);
@@ -138,7 +138,12 @@ impl RutorDatabase {
 }
 
 async fn download(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, reqwest::Error> {
-    let response = client.get(url).send().await?.error_for_status()?;
+    let response = client
+        .get(url)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await?
+        .error_for_status()?;
     Ok(response.bytes().await?.to_vec())
 }
 
