@@ -217,6 +217,7 @@ impl TorrentCoordinator {
             })
             .normalized();
         cache.set_cap_bytes(settings.cache_cap());
+        engine.set_rate_limits(settings.rate_limits());
         // An unsaved torrent does not survive a restart, so neither does its
         // cache: nothing would ever count those bytes against the cap.
         match state.list_torrents() {
@@ -336,6 +337,7 @@ impl TorrentCoordinator {
         self.state
             .set_settings(&serde_json::to_string(&settings).expect("settings serialize"))?;
         self.cache.set_cap_bytes(settings.cache_cap());
+        self.engine.set_rate_limits(settings.rate_limits());
         *self
             .settings
             .write()
@@ -1183,7 +1185,8 @@ mod tests {
 
     use rustorr_cache::{CacheConfig, MemoryStore, TorrentLayout};
     use rustorr_engine::{
-        AddOptions, DeletedTorrent, EngineFuture, EngineStatus, TorrentFile, TorrentMetadata,
+        AddOptions, DeletedTorrent, EngineFuture, EngineStatus, RateLimits, TorrentFile,
+        TorrentMetadata,
     };
 
     use super::*;
@@ -1200,6 +1203,7 @@ mod tests {
         block_prefetch: AtomicBool,
         deletes: AtomicUsize,
         live_peers: usize,
+        rate_limits: StdMutex<RateLimits>,
     }
 
     impl FakeEngine {
@@ -1219,6 +1223,7 @@ mod tests {
                 block_prefetch: AtomicBool::new(false),
                 deletes: AtomicUsize::new(0),
                 live_peers: 2,
+                rate_limits: StdMutex::default(),
             }
         }
 
@@ -1351,6 +1356,10 @@ mod tests {
                 })
             })
         }
+
+        fn set_rate_limits(&self, limits: RateLimits) {
+            *self.rate_limits.lock().unwrap() = limits;
+        }
     }
 
     struct Fixture {
@@ -1464,6 +1473,41 @@ mod tests {
 
         assert!(!fixture.engine.is_loaded(entry.hash));
         assert!(fixture.state.torrent(entry.hash).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn rate_limits_in_kib_reach_the_engine_and_zero_lifts_them() {
+        let fixture = Fixture::new(1_000);
+        fixture
+            .coordinator
+            .set_settings(Settings {
+                download_rate_limit: 2_048,
+                upload_rate_limit: 100,
+                ..fixture.coordinator.settings()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            *fixture.engine.rate_limits.lock().unwrap(),
+            RateLimits {
+                download: Some(2_048 * 1024),
+                upload: Some(100 * 1024),
+            }
+        );
+
+        fixture
+            .coordinator
+            .set_settings(Settings {
+                download_rate_limit: 0,
+                upload_rate_limit: -1,
+                ..fixture.coordinator.settings()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            *fixture.engine.rate_limits.lock().unwrap(),
+            RateLimits::default()
+        );
     }
 
     #[tokio::test]

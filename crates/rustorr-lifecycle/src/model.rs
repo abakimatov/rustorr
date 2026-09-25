@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustorr_domain::InfoHash;
+use rustorr_engine::RateLimits;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +200,20 @@ impl Settings {
 
     pub fn cache_cap(&self) -> u64 {
         u64::try_from(self.cache_size).unwrap_or(0)
+    }
+
+    /// MatriX.145 limits in KiB/s, 0 or less for none, as bytes per second.
+    pub fn rate_limits(&self) -> RateLimits {
+        let bytes = |kib: i32| {
+            u32::try_from(kib)
+                .ok()
+                .filter(|kib| *kib > 0)
+                .map(|kib| kib.saturating_mul(1024))
+        };
+        RateLimits {
+            download: bytes(self.download_rate_limit),
+            upload: bytes(self.upload_rate_limit),
+        }
     }
 }
 

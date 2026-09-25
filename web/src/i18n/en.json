@@ -216,6 +216,8 @@
       "download": "Download limit",
       "upload": "Upload limit",
       "kbps": "KB/s",
+      "limitHint": "0 means no limit. The engine cannot go below 16 KB/s, one block at a time.",
+      "uploadHint": "0 means no limit. On a VPS that bills outgoing traffic, limit what peers get.",
       "kbitps": "kbit/s",
       "connections": "Connections per torrent",
       "port": "Peer port",

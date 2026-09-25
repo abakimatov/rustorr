@@ -24,6 +24,8 @@ pub enum TorrentSource {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AddOptions {
+    /// Files to download until one is read; `None` is all. From the first
+    /// read on, only the files read download.
     pub only_files: Option<Vec<usize>>,
     pub initial_peers: Vec<SocketAddr>,
     /// Trackers announced to in addition to the torrent's own.
@@ -118,4 +120,13 @@ pub trait Engine: Send + Sync {
     fn piece_length(&self, hash: InfoHash) -> Result<u64, Error>;
     fn torrent_status(&self, hash: InfoHash) -> EngineFuture<'_, TorrentStatus>;
     fn delete(&self, hash: InfoHash) -> EngineFuture<'_, DeletedTorrent>;
+    /// Transfer limits for the whole engine, applied to live torrents too.
+    fn set_rate_limits(&self, limits: RateLimits);
+}
+
+/// Bytes per second; `None` is unlimited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RateLimits {
+    pub download: Option<u32>,
+    pub upload: Option<u32>,
 }

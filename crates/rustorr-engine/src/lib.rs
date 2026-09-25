@@ -17,6 +17,6 @@ pub use cache_storage::{CacheStorage, CacheStorageFactory};
 pub use config::EngineConfig;
 pub use error::Error;
 pub use port::{
-    AddOptions, DeletedTorrent, Engine, EngineFuture, EngineStatus, TorrentFile, TorrentMetadata,
-    TorrentReader, TorrentSource, TorrentStatus,
+    AddOptions, DeletedTorrent, Engine, EngineFuture, EngineStatus, RateLimits, TorrentFile,
+    TorrentMetadata, TorrentReader, TorrentSource, TorrentStatus,
 };

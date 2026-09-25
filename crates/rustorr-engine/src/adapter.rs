@@ -1,7 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::SeekFrom,
     net::{IpAddr, Ipv6Addr},
+    num::NonZeroU32,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
@@ -18,10 +19,14 @@ use tokio::io::AsyncSeekExt;
 
 use crate::{
     AddOptions, CacheStorageFactory, DeletedTorrent, Engine, EngineConfig, EngineFuture,
-    EngineStatus, Error, TorrentFile, TorrentMetadata, TorrentReader, TorrentSource, TorrentStatus,
+    EngineStatus, Error, RateLimits, TorrentFile, TorrentMetadata, TorrentReader, TorrentSource,
+    TorrentStatus,
 };
 
 const SCRATCH_DIR: &str = "scratch";
+/// librqbit takes a whole 16 KiB block from its limiter at once and fails
+/// the transfer when the limit is below that.
+const MIN_RATE_LIMIT: u32 = 16 * 1024;
 const DHT_CACHE_FILE: &str = "dht.json";
 
 /// [`Engine`] backed by a `librqbit` session. The only place in Rustorr that
@@ -30,6 +35,9 @@ pub struct LibrqbitEngine {
     session: Arc<Session>,
     status: EngineStatus,
     loaded: Mutex<HashMap<InfoHash, usize>>,
+    /// Serializes changes to a torrent's file selection, which librqbit
+    /// replaces as a whole.
+    selection: tokio::sync::Mutex<()>,
 }
 
 impl LibrqbitEngine {
@@ -66,6 +74,7 @@ impl LibrqbitEngine {
             session,
             status,
             loaded: Mutex::default(),
+            selection: tokio::sync::Mutex::default(),
         })
     }
 
@@ -263,12 +272,39 @@ impl LibrqbitEngine {
             .with_metadata(|metadata| metadata.file_infos.get(file_id).map(|file| file.len))
             .map_err(Error::Torrent)?
             .ok_or(Error::NotLoaded(hash))?;
+        self.select(&handle, file_id).await?;
         let mut reader = handle.stream(file_id).await.map_err(Error::Torrent)?;
         reader
             .seek(SeekFrom::Start(offset))
             .await
             .map_err(|error| Error::Torrent(error.into()))?;
         Ok(TorrentReader::new(reader, file_length))
+    }
+
+    /// Narrows the torrent to the files read since it was added. A torrent
+    /// starts with every file selected, so it keeps its peers while nobody
+    /// reads it (librqbit drops seeders from a torrent that needs nothing),
+    /// and the idle timeout bounds that. From the first read on, only read
+    /// files download, closer to MatriX.145, which fetches only what its
+    /// readers ask for: one episode played does not download the season.
+    async fn select(&self, handle: &Arc<ManagedTorrent>, file_id: usize) -> Result<(), Error> {
+        let _selection = self.selection.lock().await;
+        // `None` is the whole torrent as added; `Some` is what was read.
+        let selected = handle.only_files();
+        let file_count = handle
+            .with_metadata(|metadata| metadata.file_infos.len())
+            .map_err(Error::Torrent)?;
+        if selected.is_none() && file_count == 1 {
+            return Ok(());
+        }
+        let mut selected: HashSet<usize> = selected.unwrap_or_default().into_iter().collect();
+        if selected.insert(file_id) {
+            self.session
+                .update_only_files(handle, &selected)
+                .await
+                .map_err(Error::Torrent)?;
+        }
+        Ok(())
     }
 
     fn handle(&self, id: usize) -> Option<Arc<ManagedTorrent>> {
@@ -387,6 +423,14 @@ impl Engine for LibrqbitEngine {
 
     fn delete(&self, hash: InfoHash) -> EngineFuture<'_, DeletedTorrent> {
         Box::pin(self.delete_inner(hash))
+    }
+
+    fn set_rate_limits(&self, limits: RateLimits) {
+        let limit = |bps: Option<u32>| bps.and_then(|bps| NonZeroU32::new(bps.max(MIN_RATE_LIMIT)));
+        self.session
+            .ratelimits
+            .set_download_bps(limit(limits.download));
+        self.session.ratelimits.set_upload_bps(limit(limits.upload));
     }
 }
 

@@ -135,6 +135,24 @@ export function NetworkSection({ draft, update }: SectionProps) {
         rows={8}
         onChange={(value) => update({ DefaultTrackers: value })}
       />
+      <div className="grid gap-5 sm:grid-cols-2">
+        <NumberInput
+          label={t('settings.network.download')}
+          hint={t('settings.network.limitHint')}
+          value={draft.DownloadRateLimit}
+          min={0}
+          suffix={t('settings.network.kbps')}
+          onChange={(value) => update({ DownloadRateLimit: value })}
+        />
+        <NumberInput
+          label={t('settings.network.upload')}
+          hint={t('settings.network.uploadHint')}
+          value={draft.UploadRateLimit}
+          min={0}
+          suffix={t('settings.network.kbps')}
+          onChange={(value) => update({ UploadRateLimit: value })}
+        />
+      </div>
       <NotApplied>
         <TextInput
           label={t('settings.network.trackersUrl')}
@@ -143,20 +161,6 @@ export function NetworkSection({ draft, update }: SectionProps) {
           onChange={(value) => update({ TrackersListURL: value })}
         />
         <div className="grid gap-5 sm:grid-cols-2">
-          <NumberInput
-            label={t('settings.network.download')}
-            value={draft.DownloadRateLimit}
-            min={0}
-            suffix={t('settings.network.kbps')}
-            onChange={(value) => update({ DownloadRateLimit: value })}
-          />
-          <NumberInput
-            label={t('settings.network.upload')}
-            value={draft.UploadRateLimit}
-            min={0}
-            suffix={t('settings.network.kbps')}
-            onChange={(value) => update({ UploadRateLimit: value })}
-          />
           <NumberInput
             label={t('settings.network.connections')}
             value={draft.ConnectionsLimit}

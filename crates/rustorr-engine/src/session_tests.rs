@@ -109,12 +109,17 @@ async fn session(scratch: &Path, listen: bool) -> Arc<Session> {
 
 /// A seeder holding the complete file on the filesystem.
 async fn seeder(fixture: &Fixture, scratch: &Path) -> (Arc<Session>, SocketAddr) {
+    seed(fixture.torrent.clone(), &fixture.content_dir, scratch).await
+}
+
+/// A seeder of `torrent` whose files are in `folder`.
+async fn seed(torrent: Vec<u8>, folder: &Path, scratch: &Path) -> (Arc<Session>, SocketAddr) {
     let session = session(scratch, true).await;
     let added = session
         .add_torrent(
-            AddTorrent::from_bytes(fixture.torrent.clone()),
+            AddTorrent::from_bytes(torrent),
             Some(AddTorrentOptions {
-                output_folder: Some(fixture.content_dir.to_string_lossy().into_owned()),
+                output_folder: Some(folder.to_string_lossy().into_owned()),
                 overwrite: true,
                 ..AddTorrentOptions::default()
             }),
@@ -411,6 +416,174 @@ async fn a_magnet_resolves_then_downloads_from_the_peer_it_found() {
     assert!(
         bytes == fixture.data,
         "streamed bytes differ from the source"
+    );
+
+    engine.shutdown().await;
+    seeder_session.stop().await;
+}
+
+/// Once a file of a torrent is read, only the files read download: one
+/// episode of a season pack does not fetch the others. The download is
+/// throttled so the other episode cannot complete before the read starts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_the_file_being_read_is_downloaded() {
+    use crate::{AddOptions, Engine, EngineConfig, LibrqbitEngine, RateLimits, TorrentSource};
+    use rustorr_domain::FileIndex;
+
+    let dir = tempfile::tempdir().unwrap();
+    let season = dir.path().join("season");
+    std::fs::create_dir(&season).unwrap();
+    // Whole pieces per file, so no piece is shared between the episodes.
+    let episode_length = 10 * PIECE_LENGTH as usize;
+    let episodes: Vec<Vec<u8>> = (1..=2u8)
+        .map(|n| {
+            (0..episode_length)
+                .map(|i| (i as u8).wrapping_mul(n).wrapping_add(n))
+                .collect()
+        })
+        .collect();
+    for (n, data) in episodes.iter().enumerate() {
+        std::fs::write(season.join(format!("e{}.bin", n + 1)), data).unwrap();
+    }
+    let created = create_torrent(
+        &season,
+        CreateTorrentOptions {
+            name: None,
+            trackers: vec![],
+            piece_length: Some(PIECE_LENGTH),
+        },
+        &BlockingSpawner::new(2),
+    )
+    .await
+    .unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let (seeder_session, address) = seed(
+        created.as_bytes().unwrap().to_vec(),
+        &season,
+        &scratch.path().join("seeder"),
+    )
+    .await;
+    let cache = cache();
+    let engine = LibrqbitEngine::start(
+        EngineConfig {
+            data_dir: scratch.path().join("client"),
+            listen_port: None,
+            listen_ip: None,
+            enable_dht: false,
+            enable_trackers: false,
+            proxy_url: None,
+        },
+        Arc::clone(&cache),
+    )
+    .await
+    .unwrap();
+    engine.set_rate_limits(RateLimits {
+        download: Some(128 * 1024),
+        upload: None,
+    });
+
+    let metadata = engine
+        .add(
+            TorrentSource::TorrentBytes(created.as_bytes().unwrap().to_vec()),
+            AddOptions {
+                initial_peers: vec![address],
+                ..AddOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let second = metadata
+        .files
+        .iter()
+        .position(|file| file.path.ends_with("e2.bin"))
+        .unwrap();
+    let mut reader = engine
+        .reader(metadata.hash, FileIndex::from_zero_based(second as u32), 0)
+        .await
+        .unwrap();
+    let mut bytes = Vec::new();
+    tokio::time::timeout(TIMEOUT, reader.read_to_end(&mut bytes))
+        .await
+        .expect("reading timed out")
+        .unwrap();
+    assert!(
+        bytes == episodes[1],
+        "streamed bytes differ from the source"
+    );
+    let stored = cache.stats().stored_bytes;
+    assert!(
+        stored < 2 * episode_length as u64,
+        "the other episode was downloaded too: {stored} bytes"
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        cache.stats().stored_bytes,
+        stored,
+        "the download went on after the read file was complete"
+    );
+
+    engine.shutdown().await;
+    seeder_session.stop().await;
+}
+
+/// A download limit set on a running engine slows the transfer down: the
+/// 300 KB file at 64 KiB/s takes seconds instead of milliseconds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_download_limit_throttles_the_transfer() {
+    use crate::{AddOptions, Engine, EngineConfig, LibrqbitEngine, RateLimits, TorrentSource};
+    use rustorr_domain::FileIndex;
+
+    let fixture = Fixture::new().await;
+    let scratch = tempfile::tempdir().unwrap();
+    let (seeder_session, address) = seeder(&fixture, &scratch.path().join("seeder")).await;
+    let engine = LibrqbitEngine::start(
+        EngineConfig {
+            data_dir: scratch.path().join("client"),
+            listen_port: None,
+            listen_ip: None,
+            enable_dht: false,
+            enable_trackers: false,
+            proxy_url: None,
+        },
+        cache(),
+    )
+    .await
+    .unwrap();
+    engine.set_rate_limits(RateLimits {
+        download: Some(64 * 1024),
+        upload: None,
+    });
+
+    engine
+        .add(
+            TorrentSource::TorrentBytes(fixture.torrent.clone()),
+            AddOptions {
+                initial_peers: vec![address],
+                ..AddOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let started = Instant::now();
+    let mut reader = engine
+        .reader(fixture.hash, FileIndex::from_zero_based(0), 0)
+        .await
+        .unwrap();
+    let mut bytes = Vec::new();
+    tokio::time::timeout(TIMEOUT, reader.read_to_end(&mut bytes))
+        .await
+        .expect("reading timed out")
+        .unwrap();
+
+    assert!(
+        bytes == fixture.data,
+        "streamed bytes differ from the source"
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(2_500),
+        "300 KB at 64 KiB/s took only {elapsed:?}"
     );
 
     engine.shutdown().await;
